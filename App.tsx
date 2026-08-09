@@ -11,6 +11,7 @@ import {
   Keyboard,
   Alert,
   Image,
+  StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -89,7 +90,7 @@ export default function App() {
     }
 
     const imageResult = await ImagePicker.launchCameraAsync({
-      mediaTypes: ['images'],
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: false,
       quality: 0.7,
       base64: true,
@@ -130,7 +131,6 @@ export default function App() {
       const data: AnalysisResponse = await response.json();
       setResult(data);
 
-      // Populates the text box with Gemini's recognized food name
       if (data.food_name) {
         setFoodName(data.food_name);
       }
@@ -144,10 +144,11 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" />
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
           
-          {/* Header Bar (Title only, no subtitle) */}
+          {/* Header Bar */}
           <View style={styles.headerBar}>
             <Text style={styles.title}>MealSignal</Text>
             {(foodName || selectedConditions.length > 0 || selectedImage || result) && (
