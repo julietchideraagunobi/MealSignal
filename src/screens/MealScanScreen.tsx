@@ -20,7 +20,8 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { UserProfile, MealAnalysis } from '../types/nutrition';
 
-const API_URL = 'https://amendments-pill-everywhere-cgi.trycloudflare.com/api/v1/analyze';
+// Live Production Render URL
+const API_URL = 'https://mealsignal.onrender.com/api/v1/analyze';
 
 const MAX_SCANS_PER_DAY = 3;
 const TRIAL_DAYS = 3;
@@ -232,31 +233,31 @@ export default function MealScanScreen() {
       });
 
       // 1. Handle Daily Limit Reached Error
-    if (response.status === 403 || response.status === 429) {
-      Alert.alert(
-        'Daily Limit Reached 📸',
-        "You've used all 3 free snaps for today. Upgrade to MealSignal Premium for unlimited meal scans!",
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Upgrade Now', onPress: handleUpgrade },
-        ]
-      );
-      setLoading(false);
-      return;
-    }
+      if (response.status === 403 || response.status === 429) {
+        Alert.alert(
+          'Daily Limit Reached 📸',
+          "You've used all 3 free snaps for today. Upgrade to MealSignal Premium for unlimited meal scans!",
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Upgrade Now', onPress: handleUpgrade },
+          ]
+        );
+        setLoading(false);
+        return;
+      }
 
-    // 2. Handle generic non-200 errors
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-      Alert.alert(
-        'Analysis Error',
-        errorData?.detail || 'Something went wrong analyzing your food. Please try again.'
-      );
-      setLoading(false);
-      return;
-    }
+      // 2. Handle generic non-200 errors
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        Alert.alert(
+          'Analysis Error',
+          errorData?.detail || 'Something went wrong analyzing your food. Please try again.'
+        );
+        setLoading(false);
+        return;
+      }
 
-    const data = await response.json();
+      const data = await response.json();
 
       const parsedResult: MealAnalysis = {
         foodName: data.food_name || foodName || 'Scanned Food Item',

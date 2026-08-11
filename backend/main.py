@@ -1,22 +1,33 @@
 import os
 import json
 import base64
+import importlib
 from pathlib import Path
 from typing import List, Optional, Literal
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, Request, HTTPException, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from fastapi import FastAPI
+
+try:
+    stripe = importlib.import_module("stripe")
+except ModuleNotFoundError:
+    stripe = None
 
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path)
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY is missing from backend/.env")
 client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Stripe API Keys
+if stripe is not None:
+    stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 
 LANGUAGE_MAPPING = {"en": "English", "de": "German", "fr": "French"}
 
@@ -144,7 +155,6 @@ def evaluate_conditions(raw: dict, conditions: list[str], lang: str = "en") -> t
 
     return worst_severity, worst_message
 
-app = FastAPI()
 
 @app.get("/")
 def read_root():
@@ -240,6 +250,42 @@ async def analyze_food(payload: AnalysisRequest):
 async def portion_feedback(payload: PortionFeedbackRequest):
     print(f"Portion feedback received for '{payload.foodName}': {payload.feedback}")
     return {"status": "ok", "message": "Feedback recorded"}
+
+
+@app.post("/api/v1/webhook")
+async def stripe_webhook(request: Request, stripe_signature: str = Header(None)):
+    payload = await request.body()
+
+    try:
+        if stripe is None and WEBHOOK_SECRET:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Stripe integration is unavailable",
+            )
+        if WEBHOOK_SECRET:
+            event = stripe.Webhook.construct_event(
+                payload, stripe_signature, WEBHOOK_SECRET
+            )
+        else:
+            data = json.loads(payload)
+            event = data
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Webhook Error: {str(e)}"
+        )
+    except stripe.error.SignatureVerificationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Webhook Error: {str(e)}"
+        )
+
+    if event.get("type") == "checkout.session.completed":
+        session = event["data"]["object"]
+        customer_email = session.get("customer_details", {}).get("email")
+        print(f"🎉 Payment successful for user: {customer_email}")
+
+    return {"status": "success"}
 
 
 if __name__ == "__main__":
