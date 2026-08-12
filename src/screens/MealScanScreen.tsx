@@ -79,12 +79,20 @@ export default function MealScanScreen() {
   const [isSubscribed, setIsSubscribed] = useState<boolean>(false);
 
   // Load persistent scan counts when screen mounts
+  // Load persistent scan counts and trial date when screen mounts
   useEffect(() => {
     const loadScanData = async () => {
       try {
         const savedDay = await AsyncStorage.getItem('lastScanDay');
         const savedCount = await AsyncStorage.getItem('scanCountToday');
+        let savedTrialStart = await AsyncStorage.getItem('trialStartDate');
         const todayStr = new Date().toISOString().split('T')[0];
+
+        // Lock trial start date permanently on first launch
+        if (!savedTrialStart) {
+          savedTrialStart = new Date().toISOString();
+          await AsyncStorage.setItem('trialStartDate', savedTrialStart);
+        }
 
         if (savedDay === todayStr && savedCount !== null) {
           setLastScanDay(savedDay);
@@ -102,6 +110,7 @@ export default function MealScanScreen() {
 
     loadScanData();
   }, []);
+
 
   const presetConditions = [
     { label: 'Diabetes', key: 'diabetes' },
