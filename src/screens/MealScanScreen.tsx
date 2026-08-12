@@ -29,7 +29,6 @@ const TRIAL_DAYS = 3;
 const STRIPE_MONTHLY_URL = 'https://buy.stripe.com/test_dRm8wRfFdg8bboJ2b5fAc00';
 const STRIPE_ANNUAL_URL = 'https://buy.stripe.com/test_5kQ3cxgJh1dh3Wh7vpfAc01';
 
-
 const UI_TEXT = {
   en: {
     portionQuestion: "Is this portion estimate accurate?",
@@ -321,6 +320,20 @@ export default function MealScanScreen() {
   const todayStr = new Date().toISOString().split('T')[0];
   const scansUsedToday = lastScanDay === todayStr ? scanCountToday : 0;
   const scansRemainingToday = Math.max(0, MAX_SCANS_PER_DAY - scansUsedToday);
+
+  {/* Reset Button */}
+{analysis && !loading && (
+  <TouchableOpacity style={styles.resetButton} onPress={() => {
+    setFoodName('');
+    setImageUri(null);
+    setBase64Image(null);
+    setAnalysis(null);
+    setPortionFeedback(null);
+    setPcosEnergy(null);
+  }}>
+    <Text style={styles.resetText}>Scan Another Meal</Text>
+  </TouchableOpacity>
+)}
 
   return (
     <View style={{ flex: 1 }}>
@@ -741,4 +754,6 @@ const styles = StyleSheet.create({
   planPrice: { fontSize: 12, color: '#4B5563', marginTop: 2 },
   closePaywallBtn: { backgroundColor: '#10B981', paddingVertical: 12, borderRadius: 8, width: '100%', alignItems: 'center' },
   closePaywallText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
+  resetButton: { backgroundColor: '#10B981', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginBottom: 16 },
+  resetText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
 });
