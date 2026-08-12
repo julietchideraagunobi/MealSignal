@@ -3,6 +3,7 @@
     "name": "MealSignal",
     "slug": "MealSignal",
     "version": "1.0.0",
+    "scheme": "mealsignal",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -12,10 +13,12 @@
       "backgroundColor": "#10B981"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jjuliet.mealsignal"
     },
     "android": {
       "package": "com.jjuliet.mealsignal",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#10B981"

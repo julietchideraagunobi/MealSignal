@@ -26,6 +26,10 @@ const API_URL = 'https://mealsignal.onrender.com/api/v1/analyze';
 const MAX_SCANS_PER_DAY = 3;
 const TRIAL_DAYS = 3;
 
+const STRIPE_MONTHLY_URL = 'https://buy.stripe.com/test_dRm8wRfFdg8bboJ2b5fAc00';
+const STRIPE_ANNUAL_URL = 'https://buy.stripe.com/test_5kQ3cxgJh1dh3Wh7vpfAc01';
+
+
 const UI_TEXT = {
   en: {
     portionQuestion: "Is this portion estimate accurate?",
@@ -582,54 +586,55 @@ export default function MealScanScreen() {
           </View>
         </ScrollView>
       </TouchableWithoutFeedback>
-
+      
       {/* Paywall Modal */}
-      <Modal visible={showPaywall} animationType="slide" transparent={true}>
-        <View style={styles.paywallOverlay}>
-          <View style={styles.paywallCard}>
-            <Text style={styles.paywallTag}>MEALSIGNAL PRO</Text>
-            <Text style={styles.paywallTitle}>{paywallReason || 'Unlock Unlimited Scans'}</Text>
-            <Text style={styles.paywallBody}>
-              Get unlimited condition-aware meal scans, portion learning, and instant pre-meal insights.
-            </Text>
+<Modal visible={showPaywall} animationType="slide" transparent={true}>
+  <View style={styles.paywallOverlay}>
+    <View style={styles.paywallCard}>
+      <Text style={styles.paywallTag}>MEALSIGNAL PRO</Text>
+      <Text style={styles.paywallTitle}>{paywallReason || 'Unlock Unlimited Scans'}</Text>
+      <Text style={styles.paywallBody}>
+        Get unlimited condition-aware meal scans, portion learning, and instant pre-meal insights.
+      </Text>
 
-            <TouchableOpacity
-              style={styles.planCardSelected}
-              onPress={() => {
-                setIsSubscribed(true);
-                setShowPaywall(false);
-              }}
-            >
-              <Text style={styles.planTitle}>Annual Access — $99.00 / year</Text>
-              <Text style={styles.planPrice}>$8.25/month equivalent</Text>
-            </TouchableOpacity>
+      {/* Annual Access Option */}
+      <TouchableOpacity
+        style={styles.planCardSelected}
+        onPress={() => {
+          setShowPaywall(false);
+          Linking.openURL(STRIPE_ANNUAL_URL);
+        }}
+      >
+        <Text style={styles.planTitle}>Annual Access — $99.00 / year</Text>
+        <Text style={styles.planPrice}>$8.25/month equivalent</Text>
+      </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.planCard}
-              onPress={() => {
-                setIsSubscribed(true);
-                setShowPaywall(false);
-              }}
-            >
-              <Text style={styles.planTitle}>Monthly Access — $14.00 / month</Text>
-              <Text style={styles.planPrice}>Flexible month-to-month plan</Text>
-            </TouchableOpacity>
+      {/* Monthly Access Option */}
+      <TouchableOpacity
+        style={styles.planCard}
+        onPress={() => {
+          setShowPaywall(false);
+          Linking.openURL(STRIPE_MONTHLY_URL);
+        }}
+      >
+        <Text style={styles.planTitle}>Monthly Access — $14.00 / month</Text>
+        <Text style={styles.planPrice}>Flexible month-to-month plan</Text>
+      </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.closePaywallBtn}
-              onPress={() => {
-                setIsSubscribed(true);
-                setShowPaywall(false);
-              }}
-            >
-              <Text style={styles.closePaywallText}>Unlock Unlimited Access</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <TouchableOpacity
+        style={styles.closePaywallBtn}
+        onPress={() => {
+          setShowPaywall(false);
+        }}
+      >
+        <Text style={styles.closePaywallText}>Cancel</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+</Modal>
     </View>
   );
-}
+};
 
 const styles = StyleSheet.create({
   container: { padding: 20, backgroundColor: '#F9FAFB', flexGrow: 1 },
