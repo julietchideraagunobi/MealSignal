@@ -42,7 +42,8 @@
         {
           "cameraPermission": "Allow MealSignal to access your camera to scan meals."
         }
-      ]
+      ],
+      "expo-font"
     ],
     "extra": {
       "eas": {
