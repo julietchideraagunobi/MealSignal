@@ -36,6 +36,12 @@
           "image": "./assets/splash-icon.png",
           "imageWidth": 200
         }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow MealSignal to access your camera to scan meals."
+        }
       ]
     ],
     "extra": {
