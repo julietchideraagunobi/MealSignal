@@ -102,25 +102,25 @@ THRESHOLDS = {
 
 WARNING_TEMPLATES = {
     "en": {
-        "sodium": "High sodium ({value}mg) — go easy today if you're managing blood pressure.",
-        "potassium": "High potassium ({value}mg) — check your daily limits if you're managing kidney health.",
-        "saturated fat": "Elevated saturated fat ({value}g) — watch total daily intake to protect your lipids.",
-        "glycemic load": "Higher glycemic load (~{value}) — pair with protein or fiber to soften the impact.",
-        "default_green": "No major concerns flagged for your active condition profile."
+        "sodium": "Elevated sodium ({value}mg) — balance with plenty of water and potassium-rich foods.",
+        "potassium": "Potassium estimate: {value}mg.",
+        "saturated fat": "Higher saturated fat ({value}g) — consider pairing with lean sides.",
+        "glycemic load": "Higher glycemic impact (~{value}) — pair with healthy fats or protein to steady absorption.",
+        "default_green": "Nutritional breakdown calculated successfully."
     },
     "de": {
-        "sodium": "Hoher Natriumgehalt ({value}mg) — vorsichtig bei Bluthochdruck.",
-        "potassium": "Hoher Kaliumgehalt ({value}mg) — Achten Sie auf Ihre Tagesgrenzen bei Nierenerkrankungen.",
-        "saturated fat": "Erhöhte gesättigte Fettsäuren ({value}g) — auf Cholesterinwerte achten.",
-        "glycemic load": "Höhere glykämische Last (~{value}) — mit Protein oder Ballaststoffen kombinieren.",
-        "default_green": "Keine Bedenken für Ihr aktives Gesundheitsprofil festgestellt."
+        "sodium": "Erhöhter Natriumgehalt ({value}mg) — trinken Sie ausreichend Wasser.",
+        "potassium": "Kaliumschätzung: {value}mg.",
+        "saturated fat": "Höhere gesättigte Fettsäuren ({value}g).",
+        "glycemic load": "Höhere glykämische Last (~{value}) — mit Protein oder gesunden Fetten kombinieren.",
+        "default_green": "Nährwertanalyse erfolgreich berechnet."
     },
     "fr": {
-        "sodium": "Teneur élevée en sodium ({value}mg) — modérez votre consommation si vous surveillez votre tension.",
-        "potassium": "Teneur élevée en potassium ({value}mg) — vérifiez vos limites si vous surveillez vos reins.",
-        "saturated fat": "Acides gras saturés élevés ({value}g) — surveillez votre apport quotidien.",
-        "glycemic load": "Charge glycémique élevée (~{value}) — associez avec des protéines ou des fibres.",
-        "default_green": "Aucun problème majeur signalé pour votre profil de santé actif."
+        "sodium": "Teneur en sodium ({value}mg) — veillez à bien vous hydrater.",
+        "potassium": "Estimation du potassium: {value}mg.",
+        "saturated fat": "Acides gras saturés ({value}g).",
+        "glycemic load": "Impact glycémique plus élevé (~{value}) — associez avec des protéines.",
+        "default_green": "Analyse nutritionnelle calculée avec succès."
     }
 }
 
@@ -175,26 +175,25 @@ async def analyze_food(payload: AnalysisRequest):
     food = payload.food_name.strip() if payload.food_name else "Scanned Food Item"
     user_conditions = ", ".join(payload.conditions) if payload.conditions else "None"
     target_language = LANGUAGE_MAPPING.get(payload.language, "English")
+    
 
     prompt = f"""
-    You are a food identification and nutrition estimation assistant.
+    You are an expert AI Food & Nutrition Analyzer.
 
     Food Hint/Name: "{food}"
     Mode: {payload.mode}
+    User Dietary Focus, Preferences & Conditions: {user_conditions}
     Target Language for ALL text fields: {target_language}
 
     INSTRUCTIONS:
-    1. If an image is provided, identify the exact food item/dish name from the image.
+    1. If an image is provided, accurately identify the food/dish name.
     2. Estimate total meal nutrients: kcal, protein_g, carbs_g, fat_g, sodium_mg,
        potassium_mg, phosphorus_mg, saturated_fat_g, glycemic_load.
-    3. Update `food_name` accurately (e.g., "Pepper Sauce (Shito)").
-    4. Provide `portion_estimate` (e.g., "1 portion (~300g)").
-    5. Provide a healthier alternative recipe (`recipe_title`, `ingredients`, `steps`)
-       that is naturally lower in sodium/sugar/saturated fat than the scanned item —
-       do NOT include added salt or sugar in the alternative recipe's ingredients.
-    6. Do NOT evaluate health risk, do NOT mention any medical condition, and do NOT
-       write any warning or verdict — only return the raw fields listed above.
-    7. All text output MUST be in {target_language}.
+    3. Update `food_name` accurately (e.g., "Grilled Chicken Bowl").
+    4. Provide `portion_estimate` (e.g., "1 bowl (~350g)").
+    5. Provide a balanced, nutrient-dense recipe suggestion (`recipe_title`, `ingredients`, `steps`)
+       tailored to the scanned meal and aligning with any user dietary focus or conditions if provided.
+    6. All text output MUST be in {target_language}.
     """
 
     contents = [prompt]
