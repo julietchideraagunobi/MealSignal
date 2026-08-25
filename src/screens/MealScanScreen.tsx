@@ -56,6 +56,8 @@ const UI_TEXT = {
 export default function MealScanScreen() {
   const [foodName, setFoodName] = useState('');
   const [customCondition, setCustomCondition] = useState('');
+  const [customDiet, setCustomDiet] = useState('');
+  const [dietaryList, setDietaryList] = useState<string[]>([]);
   const [language, setLanguage] = useState<'en' | 'de' | 'fr'>('en');
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [base64Image, setBase64Image] = useState<string | null>(null);
@@ -78,8 +80,6 @@ export default function MealScanScreen() {
   const [paywallReason, setPaywallReason] = useState<string>('');
   const [isSubscribed, setIsSubscribed] = useState<boolean>(false);
 
-  // Load persistent scan counts when screen mounts
-  // Load persistent scan counts and trial date when screen mounts
   useEffect(() => {
     const loadScanData = async () => {
       try {
@@ -88,7 +88,6 @@ export default function MealScanScreen() {
         let savedTrialStart = await AsyncStorage.getItem('trialStartDate');
         const todayStr = new Date().toISOString().split('T')[0];
 
-        // Lock trial start date permanently on first launch
         if (!savedTrialStart) {
           savedTrialStart = new Date().toISOString();
           await AsyncStorage.setItem('trialStartDate', savedTrialStart);
@@ -111,25 +110,8 @@ export default function MealScanScreen() {
     loadScanData();
   }, []);
 
-
-  const presetConditions = [
-    { label: 'Diabetes', key: 'diabetes' },
-    { label: 'Hypertension', key: 'hypertension' },
-    { label: 'PCOS', key: 'pcos' },
-    { label: 'Kidney Disease', key: 'kidney disease' },
-    { label: 'High Cholesterol', key: 'high cholesterol' },
-  ] as const;
-
-  const toggleCondition = (key: string) => {
-    if (userProfile.conditions.includes(key)) {
-      setUserProfile({ ...userProfile, conditions: userProfile.conditions.filter((c) => c !== key) });
-    } else {
-      setUserProfile({ ...userProfile, conditions: [...userProfile.conditions, key] });
-    }
-  };
-
   const handleAddCustomCondition = () => {
-    const trimmed = customCondition.trim().toLowerCase();
+    const trimmed = customCondition.trim();
     if (trimmed && !userProfile.conditions.includes(trimmed)) {
       setUserProfile({ ...userProfile, conditions: [...userProfile.conditions, trimmed] });
       setCustomCondition('');
@@ -138,6 +120,31 @@ export default function MealScanScreen() {
 
   const removeCondition = (key: string) => {
     setUserProfile({ ...userProfile, conditions: userProfile.conditions.filter((c) => c !== key) });
+  };
+
+  const handleAddDietaryFocus = () => {
+    const trimmed = customDiet.trim();
+    if (trimmed && !dietaryList.includes(trimmed)) {
+      setDietaryList([...dietaryList, trimmed]);
+      setCustomDiet('');
+    }
+  };
+
+  const removeDietaryFocus = (item: string) => {
+    setDietaryList(dietaryList.filter((d) => d !== item));
+  };
+
+  const handleResetAll = () => {
+    setFoodName('');
+    setImageUri(null);
+    setBase64Image(null);
+    setAnalysis(null);
+    setPortionFeedback(null);
+    setPcosEnergy(null);
+    setUserProfile({ conditions: [], pcosData: null });
+    setDietaryList([]);
+    setCustomCondition('');
+    setCustomDiet('');
   };
 
   const checkTrialStatus = (): { allowed: boolean; reason?: string } => {
@@ -232,19 +239,20 @@ export default function MealScanScreen() {
     setPcosEnergy(null);
 
     try {
+      const combinedConditions = [...userProfile.conditions, ...dietaryList];
+
       const response = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           food_name: foodName.trim() || null,
           image_data: base64Image,
-          conditions: userProfile.conditions,
+          conditions: combinedConditions,
           language: language,
           mode: isBeforeYouEat ? 'before_you_eat' : 'standard',
         }),
       });
 
-      // 1. Handle Daily Limit Reached Error
       if (response.status === 403 || response.status === 429) {
         Alert.alert(
           'Daily Limit Reached 📸',
@@ -258,7 +266,6 @@ export default function MealScanScreen() {
         return;
       }
 
-      // 2. Handle generic non-200 errors
       if (!response.ok) {
         const errorData = await response.json().catch(() => null);
         Alert.alert(
@@ -283,7 +290,7 @@ export default function MealScanScreen() {
         potassiumMg: Number(data.potassium_mg) || 0,
         glycemicLoad: Number(data.glycemic_load) || 0,
         verdict: data.verdict || 'green',
-        primaryFlag: data.warning || 'No major concerns flagged for your active condition profile.',
+        primaryFlag: data.warning || 'Nutritional breakdown calculated successfully.',
         recipeTitle: data.recipe_title || '',
         recipeIngredients: data.recipe_details?.ingredients || [],
         recipeSteps: data.recipe_details?.steps || [],
@@ -330,37 +337,23 @@ export default function MealScanScreen() {
   const scansUsedToday = lastScanDay === todayStr ? scanCountToday : 0;
   const scansRemainingToday = Math.max(0, MAX_SCANS_PER_DAY - scansUsedToday);
 
-  {/* Reset Button */}
-{analysis && !loading && (
-  <TouchableOpacity style={styles.resetButton} onPress={() => {
-    setFoodName('');
-    setImageUri(null);
-    setBase64Image(null);
-    setAnalysis(null);
-    setPortionFeedback(null);
-    setPcosEnergy(null);
-  }}>
-    <Text style={styles.resetText}>Scan Another Meal</Text>
-  </TouchableOpacity>
-)}
-
   return (
     <View style={{ flex: 1 }}>
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
           <Text style={styles.title}>MealSignal</Text>
-          <Text style={styles.tagline}>Nutrition & Ingredient Insights</Text>
+          <Text style={styles.tagline}>Smart Food & Nutrition Analyzer</Text>
 
           {/* Trial Banner */}
           {!isSubscribed && (
             <View style={styles.trialBanner}>
               <Text style={styles.trialBannerText}>
-                🆓 Trial: {scansRemainingToday}/{MAX_SCANS_PER_DAY} scans remaining today
+                🔒 Trial: {scansRemainingToday}/{MAX_SCANS_PER_DAY} scans remaining today
               </Text>
             </View>
           )}
 
-          {/* Mode Toggle */}
+          {/* Mode Bar */}
           <View style={styles.modeToggleContainer}>
             <TouchableOpacity
               style={[styles.modeBtn, !isBeforeYouEat && styles.activeModeBtn]}
@@ -368,11 +361,19 @@ export default function MealScanScreen() {
             >
               <Text style={!isBeforeYouEat ? styles.activeModeText : styles.modeText}>Log Meal</Text>
             </TouchableOpacity>
+
             <TouchableOpacity
               style={[styles.modeBtn, isBeforeYouEat && styles.activeModeBtn]}
               onPress={() => setIsBeforeYouEat(true)}
             >
               <Text style={isBeforeYouEat ? styles.activeModeText : styles.modeText}>Before You Eat 🔍</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.modeBtn}
+              onPress={() => Alert.alert('AI Coach', 'Nutrition chat coach coming in next update!')}
+            >
+              <Text style={styles.modeText}>AI Coach 💬</Text>
             </TouchableOpacity>
           </View>
 
@@ -386,10 +387,10 @@ export default function MealScanScreen() {
               onSubmitEditing={analyzeMeal}
             />
             <TouchableOpacity style={styles.actionBtn} onPress={handleSnap}>
-              <Ionicons name="camera" size={18} color="#fff" />
+              <Ionicons name="camera" size={20} color="#fff" />
             </TouchableOpacity>
             <TouchableOpacity style={styles.actionBtn} onPress={pickImage}>
-              <Ionicons name="image" size={18} color="#fff" />
+              <Ionicons name="image" size={20} color="#fff" />
             </TouchableOpacity>
           </View>
 
@@ -424,29 +425,12 @@ export default function MealScanScreen() {
             ))}
           </View>
 
-          {/* Active Conditions */}
-          <Text style={styles.sectionTitle}>Active Condition Profiles:</Text>
-          <View style={styles.conditionRow}>
-            {presetConditions.map((item) => {
-              const active = userProfile.conditions.includes(item.key);
-              return (
-                <TouchableOpacity
-                  key={item.key}
-                  style={[styles.chip, active && styles.activeChip]}
-                  onPress={() => toggleCondition(item.key)}
-                >
-                  <Text style={active ? styles.activeChipText : styles.chipText}>{item.label}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          {/* Custom Condition */}
-          <Text style={styles.sectionTitle}>Add Other Condition:</Text>
+          {/* Add Conditions */}
+          <Text style={styles.sectionTitle}>Add Conditions:</Text>
           <View style={styles.inlineInputRow}>
             <TextInput
               style={[styles.searchInput, { marginBottom: 0 }]}
-              placeholder="e.g., Lactose Intolerance, Gluten Free"
+              placeholder="e.g., Lactose Intolerance, Gluten Sensitive"
               value={customCondition}
               onChangeText={setCustomCondition}
               onSubmitEditing={handleAddCustomCondition}
@@ -456,26 +440,52 @@ export default function MealScanScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Selected Conditions Chip List — Excludes Preset Conditions */}
-          {userProfile.conditions.filter((c) => !presetConditions.some((p) => p.key === c)).length > 0 && (
-            <View style={{ marginTop: 6, marginBottom: 12 }}>
-              <View style={styles.conditionRow}>
-                {userProfile.conditions
-                  .filter((cond) => !presetConditions.some((p) => p.key === cond))
-                  .map((cond) => (
-                    <TouchableOpacity
-                      key={cond}
-                      style={styles.selectedChip}
-                      onPress={() => removeCondition(cond)}
-                    >
-                      <Text style={styles.selectedChipText}>{cond} ✕</Text>
-                    </TouchableOpacity>
-                  ))}
-              </View>
+          {/* Active Condition Chips */}
+          {userProfile.conditions.length > 0 && (
+            <View style={styles.conditionRow}>
+              {userProfile.conditions.map((cond) => (
+                <TouchableOpacity
+                  key={cond}
+                  style={styles.selectedChip}
+                  onPress={() => removeCondition(cond)}
+                >
+                  <Text style={styles.selectedChipText}>{cond} ✕</Text>
+                </TouchableOpacity>
+              ))}
             </View>
           )}
 
-          {/* Analyze Trigger Button */}
+          {/* Add Dietary Focus */}
+          <Text style={styles.sectionTitle}>Add Dietary Focus:</Text>
+          <View style={styles.inlineInputRow}>
+            <TextInput
+              style={[styles.searchInput, { marginBottom: 0 }]}
+              placeholder="e.g., High Protein, Low Carb, Deficit"
+              value={customDiet}
+              onChangeText={setCustomDiet}
+              onSubmitEditing={handleAddDietaryFocus}
+            />
+            <TouchableOpacity style={styles.addBtn} onPress={handleAddDietaryFocus}>
+              <Text style={styles.addBtnText}>Add</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Active Dietary Focus Chips */}
+          {dietaryList.length > 0 && (
+            <View style={styles.conditionRow}>
+              {dietaryList.map((item) => (
+                <TouchableOpacity
+                  key={item}
+                  style={styles.selectedChip}
+                  onPress={() => removeDietaryFocus(item)}
+                >
+                  <Text style={styles.selectedChipText}>{item} ✕</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          {/* Stacked Action Buttons */}
           <TouchableOpacity style={styles.analyzeBtn} onPress={analyzeMeal} disabled={loading}>
             {loading ? (
               <ActivityIndicator color="#fff" />
@@ -484,6 +494,10 @@ export default function MealScanScreen() {
                 {isBeforeYouEat ? 'Check Before Eating' : 'Analyze Meal'}
               </Text>
             )}
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.resetButton} onPress={handleResetAll}>
+            <Text style={styles.resetText}>🔄 Reset All Fields</Text>
           </TouchableOpacity>
 
           {/* Analysis Display */}
@@ -523,7 +537,7 @@ export default function MealScanScreen() {
                     analysis.verdict === 'green' && { color: '#065F46' },
                   ]}
                 >
-                  Condition Insight ({analysis.verdict.toUpperCase()})
+                  Nutrition Insight ({analysis.verdict.toUpperCase()})
                 </Text>
                 <Text
                   style={[
@@ -610,53 +624,53 @@ export default function MealScanScreen() {
       </TouchableWithoutFeedback>
       
       {/* Paywall Modal */}
-<Modal visible={showPaywall} animationType="slide" transparent={true}>
-  <View style={styles.paywallOverlay}>
-    <View style={styles.paywallCard}>
-      <Text style={styles.paywallTag}>MEALSIGNAL PRO</Text>
-      <Text style={styles.paywallTitle}>{paywallReason || 'Unlock Unlimited Scans'}</Text>
-      <Text style={styles.paywallBody}>
-        Get unlimited condition-aware meal scans, portion learning, and instant pre-meal insights.
-      </Text>
+      <Modal visible={showPaywall} animationType="slide" transparent={true}>
+        <View style={styles.paywallOverlay}>
+          <View style={styles.paywallCard}>
+            <Text style={styles.paywallTag}>MEALSIGNAL PRO</Text>
+            <Text style={styles.paywallTitle}>{paywallReason || 'Unlock Unlimited Scans'}</Text>
+            <Text style={styles.paywallBody}>
+              Get unlimited condition-aware meal scans, portion learning, and instant pre-meal insights.
+            </Text>
 
-      {/* Annual Access Option */}
-      <TouchableOpacity
-        style={styles.planCardSelected}
-        onPress={() => {
-          setShowPaywall(false);
-          Linking.openURL(STRIPE_ANNUAL_URL);
-        }}
-      >
-        <Text style={styles.planTitle}>Annual Access — $99.00 / year</Text>
-        <Text style={styles.planPrice}>$8.25/month equivalent</Text>
-      </TouchableOpacity>
+            {/* Annual Access Option */}
+            <TouchableOpacity
+              style={styles.planCardSelected}
+              onPress={() => {
+                setShowPaywall(false);
+                Linking.openURL(STRIPE_ANNUAL_URL);
+              }}
+            >
+              <Text style={styles.planTitle}>Annual Access — $99.00 / year</Text>
+              <Text style={styles.planPrice}>$8.25/month equivalent</Text>
+            </TouchableOpacity>
 
-      {/* Monthly Access Option */}
-      <TouchableOpacity
-        style={styles.planCard}
-        onPress={() => {
-          setShowPaywall(false);
-          Linking.openURL(STRIPE_MONTHLY_URL);
-        }}
-      >
-        <Text style={styles.planTitle}>Monthly Access — $14.00 / month</Text>
-        <Text style={styles.planPrice}>Flexible month-to-month plan</Text>
-      </TouchableOpacity>
+            {/* Monthly Access Option */}
+            <TouchableOpacity
+              style={styles.planCard}
+              onPress={() => {
+                setShowPaywall(false);
+                Linking.openURL(STRIPE_MONTHLY_URL);
+              }}
+            >
+              <Text style={styles.planTitle}>Monthly Access — $14.00 / month</Text>
+              <Text style={styles.planPrice}>Flexible month-to-month plan</Text>
+            </TouchableOpacity>
 
-      <TouchableOpacity
-        style={styles.closePaywallBtn}
-        onPress={() => {
-          setShowPaywall(false);
-        }}
-      >
-        <Text style={styles.closePaywallText}>Cancel</Text>
-      </TouchableOpacity>
-    </View>
-  </View>
-</Modal>
+            <TouchableOpacity
+              style={styles.closePaywallBtn}
+              onPress={() => {
+                setShowPaywall(false);
+              }}
+            >
+              <Text style={styles.closePaywallText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
-};
+}
 
 const styles = StyleSheet.create({
   container: { padding: 20, backgroundColor: '#F9FAFB', flexGrow: 1 },
@@ -725,8 +739,10 @@ const styles = StyleSheet.create({
     borderColor: '#10B981',
   },
   selectedChipText: { fontSize: 12, color: '#065F46', fontWeight: '600' },
-  analyzeBtn: { backgroundColor: '#10B981', padding: 14, borderRadius: 8, alignItems: 'center', marginBottom: 16 },
+  analyzeBtn: { backgroundColor: '#10B981', padding: 14, borderRadius: 8, alignItems: 'center', marginBottom: 10 },
   analyzeBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
+  resetButton: { paddingVertical: 10, alignItems: 'center', marginBottom: 16 },
+  resetText: { color: '#6B7280', fontWeight: '600', fontSize: 13 },
   resultCard: { padding: 16, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB', marginBottom: 16 },
   foodName: { fontSize: 20, fontWeight: 'bold' },
   portionText: { color: '#6B7280', marginBottom: 8 },
@@ -763,6 +779,4 @@ const styles = StyleSheet.create({
   planPrice: { fontSize: 12, color: '#4B5563', marginTop: 2 },
   closePaywallBtn: { backgroundColor: '#10B981', paddingVertical: 12, borderRadius: 8, width: '100%', alignItems: 'center' },
   closePaywallText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
-  resetButton: { backgroundColor: '#10B981', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginBottom: 16 },
-  resetText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
 });
