@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -13,8 +13,11 @@ import {
   Image,
   Modal,
   Linking,
+  FlatList,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Purchases, { PurchasesPackage, CustomerInfo } from 'react-native-purchases';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -22,12 +25,19 @@ import { UserProfile, MealAnalysis } from '../types/nutrition';
 
 // Live Production Render URL
 const API_URL = 'https://mealsignal.onrender.com/api/v1/analyze';
+const COACH_API_URL = 'https://mealsignal.onrender.com/api/v1/ai-coach';
 
 const MAX_SCANS_PER_DAY = 3;
 const TRIAL_DAYS = 3;
 
-const STRIPE_MONTHLY_URL = 'https://buy.stripe.com/test_dRm8wRfFdg8bboJ2b5fAc00';
-const STRIPE_ANNUAL_URL = 'https://buy.stripe.com/test_5kQ3cxgJh1dh3Wh7vpfAc01';
+const REVENUECAT_GOOGLE_API_KEY = 'test_RwbWrWFJuZoSYxOuuvZBZOCKohJ';
+const REVENUECAT_APPLE_API_KEY = REVENUECAT_GOOGLE_API_KEY;
+
+interface ChatMessage {
+  id: string;
+  sender: 'user' | 'ai';
+  text: string;
+}
 
 const UI_TEXT = {
   en: {
@@ -54,7 +64,21 @@ const UI_TEXT = {
 };
 
 export default function MealScanScreen() {
+  const [currentTab, setCurrentTab] = useState<'log' | 'before_eat' | 'coach' | 'profile'>('log');
+  const [coachMessages, setCoachMessages] = useState<ChatMessage[]>([
+    {
+      id: '1',
+      sender: 'ai',
+      text: "👋 Hi! I'm your MealSignal AI Coach. Ask me anything about nutrition, meal balance, or healthy recipe ideas!",
+    },
+  ]);
+  const [coachInput, setCoachInput] = useState('');
+  const [coachLoading, setCoachLoading] = useState(false);
+  const flatListRef = useRef<FlatList>(null);
   const [foodName, setFoodName] = useState('');
+  const [userName, setUserName] = useState('');
+  const [tempName, setTempName] = useState('');
+  const [dailyCalorieGoal, setDailyCalorieGoal] = useState('2000');
   const [customCondition, setCustomCondition] = useState('');
   const [customDiet, setCustomDiet] = useState('');
   const [dietaryList, setDietaryList] = useState<string[]>([]);
@@ -80,13 +104,57 @@ export default function MealScanScreen() {
   const [paywallReason, setPaywallReason] = useState<string>('');
   const [isSubscribed, setIsSubscribed] = useState<boolean>(false);
 
+  // RevenueCat states
+  const [packages, setPackages] = useState<PurchasesPackage[]>([]);
+  const [purchaseLoading, setPurchaseLoading] = useState<boolean>(false);
+
   useEffect(() => {
+    const initPurchasesAndData = async () => {
+      try {
+        // Initialize RevenueCat
+        Purchases.setLogLevel(Purchases.LOG_LEVEL.DEBUG);
+        if (Platform.OS === 'android') {
+          await Purchases.configure({ apiKey: REVENUECAT_GOOGLE_API_KEY });
+        } else if (Platform.OS === 'ios') {
+          await Purchases.configure({ apiKey: REVENUECAT_APPLE_API_KEY });
+        }
+
+        const customerInfo = await Purchases.getCustomerInfo();
+        if (customerInfo.entitlements.active['pro'] !== undefined) {
+          setIsSubscribed(true);
+        }
+        Purchases.addCustomerInfoUpdateListener((info: CustomerInfo) => {
+          if (info.entitlements.active['pro'] !== undefined) {
+            setIsSubscribed(true);
+          } else {
+            setIsSubscribed(false);
+          }
+        });
+
+        const offerings = await Purchases.getOfferings();
+        if (offerings.current && offerings.current.availablePackages.length > 0) {
+          setPackages(offerings.current.availablePackages);
+        }
+      } catch (e) {
+        console.log('Error initializing RevenueCat:', e);
+      }
+    };
+
     const loadScanData = async () => {
       try {
         const savedDay = await AsyncStorage.getItem('lastScanDay');
         const savedCount = await AsyncStorage.getItem('scanCountToday');
         let savedTrialStart = await AsyncStorage.getItem('trialStartDate');
         const todayStr = new Date().toISOString().split('T')[0];
+        const savedName = await AsyncStorage.getItem('user_name');
+        if (savedName) {
+          setUserName(savedName);
+          setTempName(savedName);
+        }
+        const savedGoal = await AsyncStorage.getItem('daily_calorie_goal');
+        if (savedGoal) {
+          setDailyCalorieGoal(savedGoal);
+        }
 
         if (!savedTrialStart) {
           savedTrialStart = new Date().toISOString();
@@ -107,8 +175,56 @@ export default function MealScanScreen() {
       }
     };
 
+    initPurchasesAndData();
     loadScanData();
   }, []);
+
+  const handlePurchasePackage = async (pkg: PurchasesPackage) => {
+    setPurchaseLoading(true);
+    try {
+      const { customerInfo } = await Purchases.purchasePackage(pkg);
+      if (customerInfo.entitlements.active['pro'] !== undefined) {
+        setIsSubscribed(true);
+        setShowPaywall(false);
+        Alert.alert('Success 🎉', 'Welcome to MealSignal Pro!');
+      }
+    } catch (error: any) {
+      if (!error.userCancelled) {
+        Alert.alert('Purchase Failed', error.message || 'Could not complete purchase.');
+      }
+    } finally {
+      setPurchaseLoading(false);
+    }
+  };
+
+  const handleRestorePurchases = async () => {
+    setPurchaseLoading(true);
+    try {
+      const customerInfo = await Purchases.restorePurchases();
+      if (customerInfo.entitlements.active['pro'] !== undefined) {
+        setIsSubscribed(true);
+        setShowPaywall(false);
+        Alert.alert('Restored', 'Your Pro subscription has been restored!');
+      } else {
+        Alert.alert('No Subscription Found', 'We could not find an active Pro subscription for this account.');
+      }
+    } catch (error: any) {
+      Alert.alert('Restore Failed', error.message || 'Could not restore purchases.');
+    } finally {
+      setPurchaseLoading(false);
+    }
+  };
+
+  const saveProfileSettings = async () => {
+    try {
+      await AsyncStorage.setItem('user_name', tempName.trim());
+      await AsyncStorage.setItem('daily_calorie_goal', dailyCalorieGoal);
+      setUserName(tempName.trim());
+      Alert.alert('Saved', 'Profile settings updated successfully!');
+    } catch (e) {
+      Alert.alert('Error', 'Failed to save profile settings.');
+    }
+  };
 
   const handleAddCustomCondition = () => {
     const trimmed = customCondition.trim();
@@ -297,7 +413,7 @@ export default function MealScanScreen() {
       };
 
       setAnalysis(parsedResult);
-
+     if (!isSubscribed) {
       const todayStr = new Date().toISOString().split('T')[0];
       const newCount = lastScanDay === todayStr ? scanCountToday + 1 : 1;
 
@@ -306,6 +422,7 @@ export default function MealScanScreen() {
 
       await AsyncStorage.setItem('lastScanDay', todayStr);
       await AsyncStorage.setItem('scanCountToday', newCount.toString());
+      }
 
       if (parsedResult.foodName) {
         setFoodName(parsedResult.foodName);
@@ -333,296 +450,496 @@ export default function MealScanScreen() {
     }
   };
 
+  const handleSendCoachMessage = async () => {
+    const trimmedMessage = coachInput.trim();
+    if (!trimmedMessage || coachLoading) {
+      return;
+    }
+
+    const userMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      sender: 'user',
+      text: trimmedMessage,
+    };
+
+    setCoachMessages((prev) => [...prev, userMessage]);
+    setCoachInput('');
+    setCoachLoading(true);
+
+    try {
+      const response = await fetch(COACH_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: trimmedMessage,
+          history: coachMessages.map((m) => ({ sender: m.sender, text: m.text })),
+          userContext: {
+            name: userName || 'Friend',
+            goals: dietaryList.join(', ') || 'Healthy nutrition',
+            conditions: userProfile.conditions.join(', '),
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Coach request failed with status ${response.status}`);
+      }
+
+      const data = await response.json();
+      const coachReply = data.reply || data.message || data.response || 'I could not generate a response right now.';
+
+      setCoachMessages((prev) => [
+        ...prev,
+        {
+          id: `ai-${Date.now()}`,
+          sender: 'ai',
+          text: String(coachReply),
+        },
+      ]);
+    } catch (error) {
+      setCoachMessages((prev) => [
+        ...prev,
+        {
+          id: `ai-error-${Date.now()}`,
+          sender: 'ai',
+          text: 'Sorry, I could not reach your nutrition coach right now. Please try again.',
+        },
+      ]);
+    } finally {
+      setCoachLoading(false);
+    }
+  };
+
   const todayStr = new Date().toISOString().split('T')[0];
   const scansUsedToday = lastScanDay === todayStr ? scanCountToday : 0;
   const scansRemainingToday = Math.max(0, MAX_SCANS_PER_DAY - scansUsedToday);
+
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) {
+      return `Good morning${userName ? ', ' + userName : ''}! 🌅`;
+    } else if (hour < 18) {
+      return `Good afternoon${userName ? ', ' + userName : ''}! ☀️`;
+    } else {
+      return `Good evening${userName ? ', ' + userName : ''}! 🌙`;
+    }
+  };
 
   return (
     <View style={{ flex: 1 }}>
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
           <Text style={styles.title}>MealSignal</Text>
+          <Text style={styles.greetingText}>{getGreeting()}</Text>
           <Text style={styles.tagline}>Smart Food & Nutrition Analyzer</Text>
 
-          {/* Trial Banner */}
-          {!isSubscribed && (
-            <View style={styles.trialBanner}>
+
+         {/* Trial / Pro Status Banner */}
+          {!isSubscribed ? (
+            <TouchableOpacity style={styles.trialBanner} onPress={handleUpgrade}>
               <Text style={styles.trialBannerText}>
                 🔒 Trial: {scansRemainingToday}/{MAX_SCANS_PER_DAY} scans remaining today
               </Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.proBanner}>
+              <Text style={styles.proBannerText}>✨ MealSignal Pro Active — Unlimited Scans</Text>
             </View>
           )}
 
-          {/* Mode Bar */}
+
+             {/* Mode Bar */}
           <View style={styles.modeToggleContainer}>
             <TouchableOpacity
-              style={[styles.modeBtn, !isBeforeYouEat && styles.activeModeBtn]}
-              onPress={() => setIsBeforeYouEat(false)}
+              style={[styles.modeBtn, currentTab === 'log' && styles.activeModeBtn]}
+              onPress={() => {
+                setCurrentTab('log');
+                setIsBeforeYouEat(false);
+              }}
             >
-              <Text style={!isBeforeYouEat ? styles.activeModeText : styles.modeText}>Log Meal</Text>
+              <Text style={currentTab === 'log' ? styles.activeModeText : styles.modeText}>Log Meal</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.modeBtn, isBeforeYouEat && styles.activeModeBtn]}
-              onPress={() => setIsBeforeYouEat(true)}
+              style={[styles.modeBtn, currentTab === 'before_eat' && styles.activeModeBtn]}
+              onPress={() => {
+                setCurrentTab('before_eat');
+                setIsBeforeYouEat(true);
+              }}
             >
-              <Text style={isBeforeYouEat ? styles.activeModeText : styles.modeText}>Before You Eat 🔍</Text>
+              <Text style={currentTab === 'before_eat' ? styles.activeModeText : styles.modeText}>Before You Eat 🔍</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={styles.modeBtn}
-              onPress={() => Alert.alert('AI Coach', 'Nutrition chat coach coming in next update!')}
+              style={[styles.modeBtn, currentTab === 'coach' && styles.activeModeBtn]}
+              onPress={() => setCurrentTab('coach')}
             >
-              <Text style={styles.modeText}>AI Coach 💬</Text>
+              <Text style={currentTab === 'coach' ? styles.activeModeText : styles.modeText}>AI Coach 💬</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.modeBtn, currentTab === 'profile' && styles.activeModeBtn]}
+              onPress={() => setCurrentTab('profile')}
+            >
+              <Text style={currentTab === 'profile' ? styles.activeModeText : styles.modeText}>Profile 👤</Text>
             </TouchableOpacity>
           </View>
 
-          {/* Search Row */}
-          <View style={styles.inputRow}>
-            <TextInput
-              style={styles.searchInput}
-              placeholder={isBeforeYouEat ? 'Scan dish/label before eating...' : 'Search food or snap label...'}
-              value={foodName}
-              onChangeText={setFoodName}
-              onSubmitEditing={analyzeMeal}
-            />
-            <TouchableOpacity style={styles.actionBtn} onPress={handleSnap}>
-              <Ionicons name="camera" size={20} color="#fff" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionBtn} onPress={pickImage}>
-              <Ionicons name="image" size={20} color="#fff" />
-            </TouchableOpacity>
-          </View>
+          {/* CONDITIONAL RENDER: Profile vs AI Coach vs Scan View */}
+          {currentTab === 'profile' ? (
+            /* PROFILE & SETTINGS VIEW */
+            <View style={styles.profileCard}>
+              <Text style={styles.profileSectionHeader}>Personal Details & Goals</Text>
 
-          {/* Image Preview */}
-          {imageUri && (
-            <View style={styles.imagePreviewContainer}>
-              <Image source={{ uri: imageUri }} style={styles.previewImage} />
+              <Text style={styles.inputLabel}>Your Name</Text>
+              <TextInput
+                style={styles.profileInput}
+                placeholder="Enter your name"
+                value={tempName}
+                onChangeText={setTempName}
+              />
+
+              <Text style={styles.inputLabel}>Daily Calorie Target (kcal)</Text>
+              <TextInput
+                style={styles.profileInput}
+                placeholder="e.g. 2000"
+                keyboardType="numeric"
+                value={dailyCalorieGoal}
+                onChangeText={setDailyCalorieGoal}
+              />
+
+              <TouchableOpacity style={styles.saveProfileBtn} onPress={saveProfileSettings}>
+                <Text style={styles.saveProfileBtnText}>Save Profile & Goals</Text>
+              </TouchableOpacity>
+
+              <View style={styles.divider} />
+
+              <Text style={styles.profileSectionHeader}>Help & Support</Text>
               <TouchableOpacity
-                onPress={() => {
-                  setImageUri(null);
-                  setBase64Image(null);
-                }}
+                style={styles.settingRow}
+                onPress={() => Linking.openURL('mailto:joananthony5991@gmail.com?subject=MealSignal Support')}
               >
-                <Text style={styles.removeImageText}>Remove Photo ✕</Text>
+                <Ionicons name="mail-outline" size={20} color="#10B981" />
+                <Text style={styles.settingRowText}>Contact Support</Text>
+                <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+              </TouchableOpacity>
+
+              <View style={styles.divider} />
+
+              <Text style={styles.profileSectionHeader}>About MealSignal</Text>
+              <View style={styles.aboutRow}>
+                <Text style={styles.aboutLabel}>Version</Text>
+                <Text style={styles.aboutValue}>1.0.0 (Production)</Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.settingRow}
+                onPress={() => Linking.openURL('https://mealsignal.netlify.app/privacy')}
+              >
+                <Ionicons name="shield-checkmark-outline" size={20} color="#10B981" />
+                <Text style={styles.settingRowText}>Privacy Policy</Text>
+                <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.settingRow}
+                onPress={() => Linking.openURL('https://mealsignal.netlify.app/terms')}
+              >
+                <Ionicons name="document-text-outline" size={20} color="#10B981" />
+                <Text style={styles.settingRowText}>Terms of Service</Text>
+                <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
               </TouchableOpacity>
             </View>
-          )}
-
-          {/* Language Selector */}
-          <Text style={styles.sectionTitle}>Language:</Text>
-          <View style={styles.conditionRow}>
-            {(['en', 'de', 'fr'] as const).map((lang) => (
-              <TouchableOpacity
-                key={lang}
-                style={[styles.chip, language === lang && styles.activeChip]}
-                onPress={() => setLanguage(lang)}
-              >
-                <Text style={language === lang ? styles.activeChipText : styles.chipText}>
-                  {lang.toUpperCase()}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {/* Add Conditions */}
-          <Text style={styles.sectionTitle}>Add Conditions:</Text>
-          <View style={styles.inlineInputRow}>
-            <TextInput
-              style={[styles.searchInput, { marginBottom: 0 }]}
-              placeholder="e.g., Lactose Intolerance, Gluten Sensitive"
-              value={customCondition}
-              onChangeText={setCustomCondition}
-              onSubmitEditing={handleAddCustomCondition}
-            />
-            <TouchableOpacity style={styles.addBtn} onPress={handleAddCustomCondition}>
-              <Text style={styles.addBtnText}>Add</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Active Condition Chips */}
-          {userProfile.conditions.length > 0 && (
-            <View style={styles.conditionRow}>
-              {userProfile.conditions.map((cond) => (
-                <TouchableOpacity
-                  key={cond}
-                  style={styles.selectedChip}
-                  onPress={() => removeCondition(cond)}
-                >
-                  <Text style={styles.selectedChipText}>{cond} ✕</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-
-          {/* Add Dietary Focus */}
-          <Text style={styles.sectionTitle}>Add Dietary Focus:</Text>
-          <View style={styles.inlineInputRow}>
-            <TextInput
-              style={[styles.searchInput, { marginBottom: 0 }]}
-              placeholder="e.g., High Protein, Low Carb, Deficit"
-              value={customDiet}
-              onChangeText={setCustomDiet}
-              onSubmitEditing={handleAddDietaryFocus}
-            />
-            <TouchableOpacity style={styles.addBtn} onPress={handleAddDietaryFocus}>
-              <Text style={styles.addBtnText}>Add</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Active Dietary Focus Chips */}
-          {dietaryList.length > 0 && (
-            <View style={styles.conditionRow}>
-              {dietaryList.map((item) => (
-                <TouchableOpacity
-                  key={item}
-                  style={styles.selectedChip}
-                  onPress={() => removeDietaryFocus(item)}
-                >
-                  <Text style={styles.selectedChipText}>{item} ✕</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-
-          {/* Stacked Action Buttons */}
-          <TouchableOpacity style={styles.analyzeBtn} onPress={analyzeMeal} disabled={loading}>
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.analyzeBtnText}>
-                {isBeforeYouEat ? 'Check Before Eating' : 'Analyze Meal'}
-              </Text>
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.resetButton} onPress={handleResetAll}>
-            <Text style={styles.resetText}>🔄 Reset All Fields</Text>
-          </TouchableOpacity>
-
-          {/* Analysis Display */}
-          {analysis && !loading && (
-            <View style={styles.resultCard}>
-              <Text style={styles.foodName}>{analysis.foodName}</Text>
-              <Text style={styles.portionText}>{analysis.portionEstimate}</Text>
-
-              {/* Portion Feedback Loop */}
-              <View style={styles.portionBox}>
-                <Text style={styles.portionBoxTitle}>{UI_TEXT[language].portionQuestion}</Text>
-                <View style={styles.portionBtnRow}>
-                  {(['smaller', 'right', 'bigger'] as const).map((type) => (
-                    <TouchableOpacity
-                      key={type}
-                      style={[styles.portionBtn, portionFeedback === type && styles.portionBtnActive]}
-                      onPress={() => handlePortionFeedback(type)}
-                    >
-                      <Text style={styles.portionBtnText}>{type === 'right' ? 'About Right' : type}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-
-              {/* Verdict Flag */}
-              <View
-                style={[
-                  styles.flagBox,
-                  analysis.verdict === 'red' && { backgroundColor: '#FEE2E2' },
-                  analysis.verdict === 'green' && { backgroundColor: '#D1FAE5' },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.flagHeader,
-                    analysis.verdict === 'red' && { color: '#991B1B' },
-                    analysis.verdict === 'green' && { color: '#065F46' },
-                  ]}
-                >
-                  Nutrition Insight ({analysis.verdict.toUpperCase()})
-                </Text>
-                <Text
-                  style={[
-                    styles.flagText,
-                    analysis.verdict === 'red' && { color: '#7F1D1D' },
-                    analysis.verdict === 'green' && { color: '#047857' },
-                  ]}
-                >
-                  {analysis.primaryFlag}
-                </Text>
-              </View>
-
-              {/* Macronutrient Cards */}
-              <View style={styles.macroRow}>
-                <View style={styles.macroBadge}>
-                  <Text>{analysis.calories} kcal</Text>
-                </View>
-                <View style={styles.macroBadge}>
-                  <Text>P: {analysis.proteinGrams}g</Text>
-                </View>
-                <View style={styles.macroBadge}>
-                  <Text>C: {analysis.carbsGrams}g</Text>
-                </View>
-                <View style={styles.macroBadge}>
-                  <Text>F: {analysis.fatGrams}g</Text>
-                </View>
-              </View>
-
-              {/* PCOS Energy Track */}
-              {userProfile.conditions.includes('pcos') && (
-                <View style={styles.pcosSection}>
-                  <Text style={styles.pcosTitle}>{UI_TEXT[language].energyTitle}</Text>
-                  <View style={styles.energyRow}>
-                    {(['low', 'okay', 'good'] as const).map((level) => (
-                      <TouchableOpacity
-                        key={level}
-                        style={[styles.energyBtn, pcosEnergy === level && styles.energyBtnActive]}
-                        onPress={() => setPcosEnergy(level)}
-                      >
-                        <Text style={{ textTransform: 'capitalize' }}>{level}</Text>
-                      </TouchableOpacity>
-                    ))}
+          ) : currentTab === 'coach' ? (
+            <View style={styles.coachContainer}>
+              <ScrollView style={{ maxHeight: 380, marginBottom: 12 }}>
+                {coachMessages.map((item) => (
+                  <View
+                    key={item.id}
+                    style={[styles.chatBubble, item.sender === 'user' ? styles.userBubble : styles.aiBubble]}
+                  >
+                    <Text style={item.sender === 'user' ? styles.userBubbleText : styles.aiBubbleText}>
+                      {item.text}
+                    </Text>
                   </View>
+                ))}
+              </ScrollView>
+
+              {coachLoading && (
+                <View style={styles.coachLoadingRow}>
+                  <ActivityIndicator size="small" color="#10B981" />
+                  <Text style={styles.coachLoadingText}>Coach is typing...</Text>
                 </View>
               )}
 
-              {/* Recipe Alternative */}
-              {analysis.recipeTitle ? (
-                <View style={styles.recipeSection}>
-                  <Text style={styles.recipeHeader}>{UI_TEXT[language].healthyAlt} {analysis.recipeTitle}</Text>
-                  {analysis.recipeIngredients && analysis.recipeIngredients.length > 0 && (
-                    <>
-                      <Text style={styles.recipeLabel}>{UI_TEXT[language].ingredients}</Text>
-                      {analysis.recipeIngredients.map((ing, idx) => (
-                        <Text key={idx} style={styles.recipeSubText}>
-                          - {ing}
-                        </Text>
-                      ))}
-                    </>
-                  )}
-                  {analysis.recipeSteps && analysis.recipeSteps.length > 0 && (
-                    <>
-                      <Text style={[styles.recipeLabel, { marginTop: 6 }]}>{UI_TEXT[language].steps}</Text>
-                      {analysis.recipeSteps.map((step, idx) => (
-                        <Text key={idx} style={styles.recipeSubText}>
-                          {idx + 1}. {step}
-                        </Text>
-                      ))}
-                    </>
-                  )}
-                </View>
-              ) : null}
+              <View style={styles.coachInputRow}>
+                <TextInput
+                  style={styles.coachInput}
+                  placeholder="Ask your nutrition coach..."
+                  value={coachInput}
+                  onChangeText={setCoachInput}
+                  onSubmitEditing={handleSendCoachMessage}
+                />
+                <TouchableOpacity
+                  style={[styles.coachSendBtn, !coachInput.trim() && { opacity: 0.5 }]}
+                  onPress={handleSendCoachMessage}
+                  disabled={!coachInput.trim() || coachLoading}
+                >
+                  <Ionicons name="send" size={18} color="#fff" />
+                </TouchableOpacity>
+              </View>
             </View>
-          )}
+          ) : (
+            /* SCAN & LOG MEAL VIEW */
+            <>
+              {/* Search Row */}
+              <View style={styles.inputRow}>
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder={isBeforeYouEat ? 'Scan dish/label before eating...' : 'Search food or snap label...'}
+                  value={foodName}
+                  onChangeText={setFoodName}
+                  onSubmitEditing={analyzeMeal}
+                />
+                <TouchableOpacity style={styles.actionBtn} onPress={handleSnap}>
+                  <Ionicons name="camera" size={20} color="#fff" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.actionBtn} onPress={pickImage}>
+                  <Ionicons name="image" size={20} color="#fff" />
+                </TouchableOpacity>
+              </View>
 
-          {/* Medical Disclaimer */}
-          <View style={styles.disclaimerBox}>
-            <Text style={styles.disclaimerText}>
-              ⚕️ <Text style={{ fontWeight: 'bold' }}>Medical Disclaimer:</Text> MealSignal provides AI-generated
-              nutrition insights for educational purposes only. It is not a medical device.
-            </Text>
-          </View>
+              {/* Image Preview */}
+              {imageUri && (
+                <View style={styles.imagePreviewContainer}>
+                  <Image source={{ uri: imageUri }} style={styles.previewImage} />
+                  <TouchableOpacity
+                    onPress={() => {
+                      setImageUri(null);
+                      setBase64Image(null);
+                    }}
+                  >
+                    <Text style={styles.removeImageText}>Remove Photo ✕</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {/* Language Selector */}
+              <Text style={styles.sectionTitle}>Language:</Text>
+              <View style={styles.conditionRow}>
+                {(['en', 'de', 'fr'] as const).map((lang) => (
+                  <TouchableOpacity
+                    key={lang}
+                    style={[styles.chip, language === lang && styles.activeChip]}
+                    onPress={() => setLanguage(lang)}
+                  >
+                    <Text style={language === lang ? styles.activeChipText : styles.chipText}>
+                      {lang.toUpperCase()}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Add Conditions */}
+              <Text style={styles.sectionTitle}>Add Conditions:</Text>
+              <View style={styles.inlineInputRow}>
+                <TextInput
+                  style={[styles.searchInput, { marginBottom: 0 }]}
+                  placeholder="e.g., Lactose Intolerance, Gluten Sensitive"
+                  value={customCondition}
+                  onChangeText={setCustomCondition}
+                  onSubmitEditing={handleAddCustomCondition}
+                />
+                <TouchableOpacity style={styles.addBtn} onPress={handleAddCustomCondition}>
+                  <Text style={styles.addBtnText}>Add</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Active Condition Chips */}
+              {userProfile.conditions.length > 0 && (
+                <View style={styles.conditionRow}>
+                  {userProfile.conditions.map((cond) => (
+                    <TouchableOpacity
+                      key={cond}
+                      style={styles.selectedChip}
+                      onPress={() => removeCondition(cond)}
+                    >
+                      <Text style={styles.selectedChipText}>{cond} ✕</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              {/* Add Dietary Focus */}
+              <Text style={styles.sectionTitle}>Add Dietary Focus:</Text>
+              <View style={styles.inlineInputRow}>
+                <TextInput
+                  style={[styles.searchInput, { marginBottom: 0 }]}
+                  placeholder="e.g., High Protein, Low Carb, Deficit"
+                  value={customDiet}
+                  onChangeText={setCustomDiet}
+                  onSubmitEditing={handleAddDietaryFocus}
+                />
+                <TouchableOpacity style={styles.addBtn} onPress={handleAddDietaryFocus}>
+                  <Text style={styles.addBtnText}>Add</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Active Dietary Focus Chips */}
+              {dietaryList.length > 0 && (
+                <View style={styles.conditionRow}>
+                  {dietaryList.map((item) => (
+                    <TouchableOpacity
+                      key={item}
+                      style={styles.selectedChip}
+                      onPress={() => removeDietaryFocus(item)}
+                    >
+                      <Text style={styles.selectedChipText}>{item} ✕</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              {/* Stacked Action Buttons */}
+              <TouchableOpacity style={styles.analyzeBtn} onPress={analyzeMeal} disabled={loading}>
+                {loading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.analyzeBtnText}>
+                    {isBeforeYouEat ? 'Check Before Eating' : 'Analyze Meal'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.resetButton} onPress={handleResetAll}>
+                <Text style={styles.resetText}>🔄 Reset All Fields</Text>
+              </TouchableOpacity>
+
+              {/* Analysis Display */}
+              {analysis && !loading && (
+                <View style={styles.resultCard}>
+                  <Text style={styles.foodName}>{analysis.foodName}</Text>
+                  <Text style={styles.portionText}>{analysis.portionEstimate}</Text>
+
+                  {/* Portion Feedback Loop */}
+                  <View style={styles.portionBox}>
+                    <Text style={styles.portionBoxTitle}>{UI_TEXT[language].portionQuestion}</Text>
+                    <View style={styles.portionBtnRow}>
+                      {(['smaller', 'right', 'bigger'] as const).map((type) => (
+                        <TouchableOpacity
+                          key={type}
+                          style={[styles.portionBtn, portionFeedback === type && styles.portionBtnActive]}
+                          onPress={() => handlePortionFeedback(type)}
+                        >
+                          <Text style={styles.portionBtnText}>{type === 'right' ? 'About Right' : type}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+
+                  {/* Verdict Flag */}
+                  <View
+                    style={[
+                      styles.flagBox,
+                      analysis.verdict === 'red' && { backgroundColor: '#FEE2E2' },
+                      analysis.verdict === 'green' && { backgroundColor: '#D1FAE5' },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.flagHeader,
+                        analysis.verdict === 'red' && { color: '#991B1B' },
+                        analysis.verdict === 'green' && { color: '#065F46' },
+                      ]}
+                    >
+                      Nutrition Insight ({analysis.verdict.toUpperCase()})
+                    </Text>
+                    <Text
+                      style={[
+                        styles.flagText,
+                        analysis.verdict === 'red' && { color: '#7F1D1D' },
+                        analysis.verdict === 'green' && { color: '#047857' },
+                      ]}
+                    >
+                      {analysis.primaryFlag}
+                    </Text>
+                  </View>
+
+                  {/* Macronutrient Cards */}
+                  <View style={styles.macroRow}>
+                    <View style={styles.macroBadge}>
+                      <Text>{analysis.calories} kcal</Text>
+                    </View>
+                    <View style={styles.macroBadge}>
+                      <Text>P: {analysis.proteinGrams}g</Text>
+                    </View>
+                    <View style={styles.macroBadge}>
+                      <Text>C: {analysis.carbsGrams}g</Text>
+                    </View>
+                    <View style={styles.macroBadge}>
+                      <Text>F: {analysis.fatGrams}g</Text>
+                    </View>
+                  </View>
+
+                  {/* PCOS Energy Track */}
+                  {userProfile.conditions.includes('pcos') && (
+                    <View style={styles.pcosSection}>
+                      <Text style={styles.pcosTitle}>{UI_TEXT[language].energyTitle}</Text>
+                      <View style={styles.energyRow}>
+                        {(['low', 'okay', 'good'] as const).map((level) => (
+                          <TouchableOpacity
+                            key={level}
+                            style={[styles.energyBtn, pcosEnergy === level && styles.energyBtnActive]}
+                            onPress={() => setPcosEnergy(level)}
+                          >
+                            <Text style={{ textTransform: 'capitalize' }}>{level}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Recipe Alternative */}
+                  {analysis.recipeTitle ? (
+                    <View style={styles.recipeSection}>
+                      <Text style={styles.recipeHeader}>{UI_TEXT[language].healthyAlt} {analysis.recipeTitle}</Text>
+                      {analysis.recipeIngredients && analysis.recipeIngredients.length > 0 && (
+                        <>
+                          <Text style={styles.recipeLabel}>{UI_TEXT[language].ingredients}</Text>
+                          {analysis.recipeIngredients.map((ing, idx) => (
+                            <Text key={idx} style={styles.recipeSubText}>
+                              - {ing}
+                            </Text>
+                          ))}
+                        </>
+                      )}
+                      {analysis.recipeSteps && analysis.recipeSteps.length > 0 && (
+                        <>
+                          <Text style={[styles.recipeLabel, { marginTop: 6 }]}>{UI_TEXT[language].steps}</Text>
+                          {analysis.recipeSteps.map((step, idx) => (
+                            <Text key={idx} style={styles.recipeSubText}>
+                              {idx + 1}. {step}
+                            </Text>
+                          ))}
+                        </>
+                      )}
+                    </View>
+                  ) : null}
+                </View>
+              )}
+
+              {/* Medical Disclaimer */}
+              <View style={styles.disclaimerBox}>
+                <Text style={styles.disclaimerText}>
+                  ⚕️ <Text style={{ fontWeight: 'bold' }}>Medical Disclaimer:</Text> MealSignal provides AI-generated
+                  nutrition insights for educational purposes only. It is not a medical device.
+                </Text>
+              </View>
+            </>
+          )}
         </ScrollView>
       </TouchableWithoutFeedback>
-      
+
       {/* Paywall Modal */}
       <Modal visible={showPaywall} animationType="slide" transparent={true}>
         <View style={styles.paywallOverlay}>
@@ -633,35 +950,40 @@ export default function MealScanScreen() {
               Get unlimited condition-aware meal scans, portion learning, and instant pre-meal insights.
             </Text>
 
-            {/* Annual Access Option */}
-            <TouchableOpacity
-              style={styles.planCardSelected}
-              onPress={() => {
-                setShowPaywall(false);
-                Linking.openURL(STRIPE_ANNUAL_URL);
-              }}
-            >
-              <Text style={styles.planTitle}>Annual Access — $99.00 / year</Text>
-              <Text style={styles.planPrice}>$8.25/month equivalent</Text>
-            </TouchableOpacity>
+            {purchaseLoading ? (
+              <ActivityIndicator size="large" color="#10B981" style={{ marginVertical: 20 }} />
+            ) : (
+              <>
+                {packages.length > 0 ? (
+                  packages.map((pkg) => (
+                    <TouchableOpacity
+                      key={pkg.identifier}
+                      style={pkg.packageType === 'ANNUAL' ? styles.planCardSelected : styles.planCard}
+                      onPress={() => handlePurchasePackage(pkg)}
+                    >
+                      <Text style={styles.planTitle}>{pkg.product.title}</Text>
+                      <Text style={styles.planPrice}>
+                        {pkg.product.priceString} — {pkg.product.description}
+                      </Text>
+                    </TouchableOpacity>
+                  ))
+                ) : (
+                  <View style={{ marginBottom: 12 }}>
+                    <Text style={{ color: '#6B7280', fontSize: 12, textAlign: 'center' }}>
+                      Fetching available subscription plans...
+                    </Text>
+                  </View>
+                )}
 
-            {/* Monthly Access Option */}
-            <TouchableOpacity
-              style={styles.planCard}
-              onPress={() => {
-                setShowPaywall(false);
-                Linking.openURL(STRIPE_MONTHLY_URL);
-              }}
-            >
-              <Text style={styles.planTitle}>Monthly Access — $14.00 / month</Text>
-              <Text style={styles.planPrice}>Flexible month-to-month plan</Text>
-            </TouchableOpacity>
+                <TouchableOpacity style={styles.restoreBtn} onPress={handleRestorePurchases}>
+                  <Text style={styles.restoreBtnText}>Restore Previous Purchase</Text>
+                </TouchableOpacity>
+              </>
+            )}
 
             <TouchableOpacity
               style={styles.closePaywallBtn}
-              onPress={() => {
-                setShowPaywall(false);
-              }}
+              onPress={() => setShowPaywall(false)}
             >
               <Text style={styles.closePaywallText}>Cancel</Text>
             </TouchableOpacity>
@@ -676,6 +998,14 @@ const styles = StyleSheet.create({
   container: { padding: 20, backgroundColor: '#F9FAFB', flexGrow: 1 },
   title: { fontSize: 26, fontWeight: 'bold', textAlign: 'center', color: '#111827' },
   tagline: { fontSize: 13, textAlign: 'center', color: '#6B7280', marginBottom: 12 },
+  greetingText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#10B981',
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: 2,
+  },
   trialBanner: {
     backgroundColor: '#FEF3C7',
     padding: 10,
@@ -686,11 +1016,26 @@ const styles = StyleSheet.create({
   },
   trialBannerText: { color: '#92400E', fontSize: 12, fontWeight: 'bold', textAlign: 'center' },
   modeToggleContainer: { flexDirection: 'row', backgroundColor: '#E5E7EB', borderRadius: 8, padding: 4, marginBottom: 16 },
-  modeBtn: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 6 },
+  modeBtn: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8 },
   activeModeBtn: { backgroundColor: '#10B981' },
-  modeText: { color: '#374151', fontWeight: '600', fontSize: 13 },
-  activeModeText: { color: '#ffffff', fontWeight: 'bold', fontSize: 13 },
-  inputRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  modeText: { color: '#374151', fontWeight: '600', fontSize: 12 },
+  activeModeText: { color: '#ffffff', fontWeight: 'bold', fontSize: 12 },
+  inputRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
+
+  proBanner: {
+    backgroundColor: '#D1FAE5',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#10B981',
+  },
+  proBannerText: {
+    color: '#065F46',
+    fontSize: 12,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
   searchInput: {
     flex: 1,
     backgroundColor: '#FFFFFF',
@@ -722,54 +1067,47 @@ const styles = StyleSheet.create({
     borderColor: '#E5E7EB',
     marginBottom: 12,
   },
-  previewImage: { width: 48, height: 48, borderRadius: 6 },
-  removeImageText: { color: '#EF4444', fontWeight: '600', fontSize: 12 },
-  sectionTitle: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 },
-  conditionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 },
-  chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, backgroundColor: '#E5E7EB' },
-  activeChip: { backgroundColor: '#10B981' },
-  chipText: { fontSize: 12, color: '#374151' },
-  activeChipText: { fontSize: 12, color: '#FFFFFF', fontWeight: 'bold' },
-  selectedChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 14,
-    backgroundColor: '#D1FAE5',
-    borderWidth: 1,
-    borderColor: '#10B981',
-  },
-  selectedChipText: { fontSize: 12, color: '#065F46', fontWeight: '600' },
-  analyzeBtn: { backgroundColor: '#10B981', padding: 14, borderRadius: 8, alignItems: 'center', marginBottom: 10 },
-  analyzeBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
-  resetButton: { paddingVertical: 10, alignItems: 'center', marginBottom: 16 },
-  resetText: { color: '#6B7280', fontWeight: '600', fontSize: 13 },
-  resultCard: { padding: 16, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB', marginBottom: 16 },
-  foodName: { fontSize: 20, fontWeight: 'bold' },
-  portionText: { color: '#6B7280', marginBottom: 8 },
-  portionBox: { backgroundColor: '#F3F4F6', padding: 10, borderRadius: 8, marginVertical: 8 },
-  portionBoxTitle: { fontSize: 12, fontWeight: '600', color: '#374151', marginBottom: 6 },
-  portionBtnRow: { flexDirection: 'row', gap: 6 },
-  portionBtn: { flex: 1, paddingVertical: 6, borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 6, alignItems: 'center', backgroundColor: '#FFFFFF' },
-  portionBtnActive: { backgroundColor: '#D1FAE5', borderColor: '#10B981' },
-  portionBtnText: { fontSize: 11, fontWeight: '600', textTransform: 'capitalize' },
-  flagBox: { backgroundColor: '#FEF3C7', padding: 12, borderRadius: 8, marginVertical: 8 },
-  flagHeader: { fontWeight: 'bold', color: '#92400E', marginBottom: 4 },
-  flagText: { color: '#78350F', fontSize: 14 },
-  macroRow: { flexDirection: 'row', justifyContent: 'space-between', marginVertical: 8 },
-  macroBadge: { backgroundColor: '#F3F4F6', padding: 8, borderRadius: 6 },
-  pcosSection: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#F3F4F6' },
-  pcosTitle: { fontSize: 14, fontWeight: '600', marginBottom: 8 },
+  previewImage: { width: 60, height: 60, borderRadius: 6 },
+  removeImageText: { color: '#EF4444', fontWeight: 'bold', fontSize: 14 },
+  sectionTitle: { fontSize: 13, fontWeight: 'bold', color: '#374151', marginBottom: 8, marginTop: 12 },
+  chip: { backgroundColor: '#E5E7EB', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: '#D1D5DB' },
+  chipText: { color: '#374151', fontSize: 12, fontWeight: '500' },
+  activeChip: { backgroundColor: '#D1FAE5', borderColor: '#10B981' },
+  activeChipText: { color: '#047857', fontWeight: '600' },
+  conditionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  selectedChip: { backgroundColor: '#D1FAE5', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: '#10B981' },
+  selectedChipText: { color: '#047857', fontSize: 12, fontWeight: '600' },
+  analyzeBtn: { backgroundColor: '#10B981', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginBottom: 12 },
+  analyzeBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: 'bold' },
+  resetButton: { paddingVertical: 12, borderRadius: 8, alignItems: 'center', backgroundColor: '#F3F4F6', marginBottom: 16 },
+  resetText: { fontSize: 12, color: '#374151', fontWeight: '600' },
+  resultCard: { backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#E5E7EB', marginBottom: 16 },
+  foodName: { fontSize: 16, fontWeight: 'bold', color: '#111827', marginBottom: 8 },
+  portionText: { fontSize: 13, color: '#6B7280', marginBottom: 12 },
+  portionBox: { backgroundColor: '#F3F4F6', padding: 12, borderRadius: 8, marginBottom: 12 },
+  portionBoxTitle: { fontWeight: 'bold', fontSize: 12, color: '#374151', marginBottom: 8 },
+  portionBtnRow: { flexDirection: 'row', gap: 8 },
+  portionBtn: { flex: 1, paddingVertical: 8, borderRadius: 6, backgroundColor: '#E5E7EB', alignItems: 'center' },
+  portionBtnActive: { backgroundColor: '#10B981' },
+  portionBtnText: { fontSize: 11, fontWeight: '600', color: '#374151' },
+  flagBox: { padding: 12, borderRadius: 8, marginBottom: 12 },
+  flagHeader: { fontWeight: 'bold', fontSize: 12, marginBottom: 6 },
+  flagText: { fontSize: 12, lineHeight: 18 },
+  macroRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  macroBadge: { backgroundColor: '#F3F4F6', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, minWidth: 72, alignItems: 'center' },
+  pcosSection: { backgroundColor: '#F9FAFB', borderRadius: 8, padding: 12, marginBottom: 12 },
+  pcosTitle: { fontWeight: 'bold', fontSize: 12, color: '#374151', marginBottom: 8 },
   energyRow: { flexDirection: 'row', gap: 8 },
-  energyBtn: { flex: 1, padding: 8, borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 6, alignItems: 'center' },
-  energyBtnActive: { backgroundColor: '#D1FAE5', borderColor: '#10B981' },
-  recipeSection: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#F3F4F6' },
-  recipeHeader: { fontWeight: 'bold', fontSize: 14, color: '#111827', marginBottom: 6 },
-  recipeLabel: { fontWeight: '600', fontSize: 12, color: '#374151' },
-  recipeSubText: { fontSize: 12, color: '#4B5563', marginLeft: 4 },
-  disclaimerBox: { marginTop: 12, paddingVertical: 12, borderTopWidth: 1, borderTopColor: '#E5E7EB' },
-  disclaimerText: { fontSize: 11, color: '#6B7280', textAlign: 'center', lineHeight: 16 },
-  paywallOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
-  paywallCard: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 20, alignItems: 'center' },
+  energyBtn: { flex: 1, paddingVertical: 8, borderRadius: 6, backgroundColor: '#E5E7EB', alignItems: 'center' },
+  energyBtnActive: { backgroundColor: '#10B981' },
+  recipeSection: { backgroundColor: '#F9FAFB', borderRadius: 8, padding: 12, marginTop: 12 },
+  recipeHeader: { fontSize: 12, fontWeight: 'bold', color: '#0C4A6E', marginBottom: 8 },
+  recipeLabel: { fontSize: 12, fontWeight: 'bold', color: '#374151', marginTop: 8, marginBottom: 4 },
+  recipeSubText: { fontSize: 12, color: '#374151', marginBottom: 4, lineHeight: 18 },
+  disclaimerBox: { backgroundColor: '#F3F4F6', borderRadius: 8, padding: 12, marginTop: 8, borderWidth: 1, borderColor: '#E5E7EB' },
+  disclaimerText: { fontSize: 11, color: '#4B5563', lineHeight: 16 },
+  paywallOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
+  paywallCard: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 20, width: '90%', alignItems: 'center' },
   paywallTag: { color: '#10B981', fontWeight: 'bold', fontSize: 12, letterSpacing: 1, marginBottom: 8 },
   paywallTitle: { fontSize: 18, fontWeight: 'bold', textAlign: 'center', marginBottom: 8, color: '#111827' },
   paywallBody: { fontSize: 13, color: '#4B5563', textAlign: 'center', marginBottom: 16, lineHeight: 18 },
@@ -779,4 +1117,101 @@ const styles = StyleSheet.create({
   planPrice: { fontSize: 12, color: '#4B5563', marginTop: 2 },
   closePaywallBtn: { backgroundColor: '#10B981', paddingVertical: 12, borderRadius: 8, width: '100%', alignItems: 'center' },
   closePaywallText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
+  coachContainer: { backgroundColor: '#FFFFFF', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#E5E7EB', marginBottom: 16 },
+  chatBubble: { marginVertical: 6, maxWidth: '85%' },
+  userBubble: { alignSelf: 'flex-end', backgroundColor: '#10B981', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8 },
+  aiBubble: { alignSelf: 'flex-start', backgroundColor: '#F3F4F6', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8 },
+  userBubbleText: { color: '#FFFFFF', fontSize: 13 },
+  aiBubbleText: { color: '#374151', fontSize: 13 },
+  coachLoadingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 8 },
+  coachLoadingText: { color: '#6B7280', fontSize: 12 },
+  coachInputRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-end' },
+  coachInput: { flex: 1, backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, fontSize: 13, maxHeight: 100 },
+  coachSendBtn: { backgroundColor: '#10B981', width: 40, height: 40, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
+
+  // --- Profile Styles ---
+  profileCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    marginBottom: 16,
+  },
+  profileSectionHeader: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#111827',
+    marginBottom: 12,
+  },
+  inputLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 4,
+  },
+  profileInput: {
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    height: 44,
+    marginBottom: 12,
+    fontSize: 14,
+  },
+  saveProfileBtn: {
+    backgroundColor: '#10B981',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  saveProfileBtnText: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
+    marginVertical: 16,
+  },
+  settingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  settingRowText: {
+    flex: 1,
+    marginLeft: 12,
+    fontSize: 14,
+    color: '#374151',
+    fontWeight: '500',
+  },
+  aboutRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+  },
+  aboutLabel: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  aboutValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  restoreBtn: {
+    paddingVertical: 8,
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  restoreBtnText: {
+    color: '#6B7280',
+    fontSize: 12,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
 });

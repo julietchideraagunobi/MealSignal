@@ -1,20 +1,14 @@
 import os
 import json
 import base64
-import importlib
 from pathlib import Path
 from typing import List, Optional, Literal
-from fastapi import FastAPI, Request, HTTPException, Header, status
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-
-try:
-    stripe = importlib.import_module("stripe")
-except ModuleNotFoundError:
-    stripe = None
 
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path)
@@ -24,14 +18,10 @@ if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY is missing from backend/.env")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Stripe API Keys
-if stripe is not None:
-    stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
-WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 
 LANGUAGE_MAPPING = {"en": "English", "de": "German", "fr": "French"}
 
-app = FastAPI(title="MealSignal Backend API", version="1.0.0")
+app = FastAPI(title="MealSignal Backend API", version="1.0.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -91,6 +81,69 @@ class PortionFeedbackRequest(BaseModel):
     foodName: Optional[str] = None
     feedback: str
 
+class ChatMessage(BaseModel):
+    sender: str
+    text: str
+
+
+class AICoachRequest(BaseModel):
+    prompt: str
+    history: List[ChatMessage] = Field(default=[])
+    userContext: Optional[dict] = Field(default={})
+
+
+@app.post("/api/v1/ai-coach")
+async def ai_coach(payload: AICoachRequest):
+    if not payload.prompt.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Prompt cannot be empty"
+        )
+
+    user_name = payload.userContext.get("name", "Friend") if payload.userContext else "Friend"
+    user_goals = payload.userContext.get("goals", "Health & nutrition tracking") if payload.userContext else "General wellness"
+
+    system_instruction = f"""You are MealSignal AI Coach, a supportive, knowledgeable, and empathetic nutrition assistant.
+User Name: {user_name}
+User Goals: {user_goals}
+
+Guidelines:
+- Provide encouraging, practical nutrition and meal planning advice.
+- Keep answers concise, clear, and scannable (1-3 short paragraphs or bullet points).
+- If giving recommendations, emphasize balanced whole foods and healthy habits.
+"""
+
+    # Build conversation context from previous turns
+    conversation_text = ""
+    for msg in payload.history[-6:]:
+        role_label = "User" if msg.sender == "user" else "Coach"
+        conversation_text += f"{role_label}: {msg.text}\n"
+
+    final_prompt = f"{conversation_text}User: {payload.prompt}\nCoach:"
+
+    model_candidates = ["gemini-flash-latest", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
+    last_error = None
+
+    for model_name in model_candidates:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=final_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.7,
+                    max_output_tokens=400,
+                )
+            )
+            return {"reply": response.text.strip()}
+        except Exception as e:
+            print(f"Coach call failed with model '{model_name}': {e}")
+            last_error = e
+
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=f"AI Coach service failed across all model attempts: {str(last_error)}"
+    )
 
 THRESHOLDS = {
     "hypertension": {"field": "sodium_mg", "amber_at": 300, "red_at": 500, "label": "sodium"},
@@ -125,7 +178,7 @@ WARNING_TEMPLATES = {
 }
 
 # Primary model
-PRIMARY_MODEL = "gemini-3.6-flash"
+PRIMARY_MODEL = ["gemini-flash-latest", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
 
 # Fallback list in case of rate limits or temporary downtime
 FALLBACK_MODELS = [
@@ -208,7 +261,7 @@ async def analyze_food(payload: AnalysisRequest):
         except Exception as img_err:
             print(f"Failed to process image attachment: {img_err}")
 
-    model_candidates = ["gemini-flash-latest", "gemini-3.6-flash", "gemini-3.6-flash"]
+    model_candidates = ["gemini-flash-latest", "gemini-3.6-flash", "gemini-3.6-flash-light"] 
     last_error = None
 
     for model_name in model_candidates:
@@ -258,43 +311,6 @@ async def analyze_food(payload: AnalysisRequest):
 async def portion_feedback(payload: PortionFeedbackRequest):
     print(f"Portion feedback received for '{payload.foodName}': {payload.feedback}")
     return {"status": "ok", "message": "Feedback recorded"}
-
-
-@app.post("/api/v1/webhook")
-async def stripe_webhook(request: Request, stripe_signature: str = Header(None)):
-    payload = await request.body()
-
-    try:
-        if stripe is None and WEBHOOK_SECRET:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Stripe integration is unavailable",
-            )
-        if WEBHOOK_SECRET:
-            event = stripe.Webhook.construct_event(
-                payload, stripe_signature, WEBHOOK_SECRET
-            )
-        else:
-            data = json.loads(payload)
-            event = data
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Webhook Error: {str(e)}"
-        )
-    except stripe.error.SignatureVerificationError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Webhook Error: {str(e)}"
-        )
-
-    if event.get("type") == "checkout.session.completed":
-        session = event["data"]["object"]
-        customer_email = session.get("customer_details", {}).get("email")
-        print(f"🎉 Payment successful for user: {customer_email}")
-
-    return {"status": "success"}
-
 
 if __name__ == "__main__":
     import uvicorn
