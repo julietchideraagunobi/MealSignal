@@ -860,8 +860,9 @@ export default function MealScanScreen() {
                   <View
                     style={[
                       styles.flagBox,
-                      analysis.verdict === 'red' && { backgroundColor: '#FEE2E2' },
-                      analysis.verdict === 'green' && { backgroundColor: '#D1FAE5' },
+                      analysis.verdict === 'red' && { backgroundColor: '#FEE2E2', borderColor: '#EF4444' },
+                      analysis.verdict === 'green' && { backgroundColor: '#D1FAE5', borderColor: '#10B981' },
+                      analysis.verdict === 'amber' && { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' },
                     ]}
                   >
                     <Text
@@ -869,6 +870,7 @@ export default function MealScanScreen() {
                         styles.flagHeader,
                         analysis.verdict === 'red' && { color: '#991B1B' },
                         analysis.verdict === 'green' && { color: '#065F46' },
+                        analysis.verdict === 'amber' && { color: '#924005' },
                       ]}
                     >
                       Nutrition Insight ({analysis.verdict.toUpperCase()})
@@ -878,6 +880,7 @@ export default function MealScanScreen() {
                         styles.flagText,
                         analysis.verdict === 'red' && { color: '#7F1D1D' },
                         analysis.verdict === 'green' && { color: '#047857' },
+                        analysis.verdict === 'amber' && { color: '#924005' },
                       ]}
                     >
                       {analysis.primaryFlag}
@@ -1137,7 +1140,7 @@ headerRow: {
   portionBtn: { flex: 1, paddingVertical: 8, borderRadius: 6, backgroundColor: '#E5E7EB', alignItems: 'center' },
   portionBtnActive: { backgroundColor: '#10B981' },
   portionBtnText: { fontSize: 11, fontWeight: '600', color: '#374151' },
-  flagBox: { padding: 12, borderRadius: 8, marginBottom: 12 },
+  flagBox: { padding: 12, borderRadius: 8, marginBottom: 12, borderWidth: 1,borderColor: '#E5E7EB' },
   flagHeader: { fontWeight: 'bold', fontSize: 12, marginBottom: 6 },
   flagText: { fontSize: 12, lineHeight: 18 },
   macroRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
