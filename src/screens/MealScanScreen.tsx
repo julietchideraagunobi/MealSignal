@@ -31,7 +31,7 @@ const COACH_API_URL = 'https://mealsignal.onrender.com/api/v1/ai-coach';
 const MAX_SCANS_PER_DAY = 3;
 const TRIAL_DAYS = 3;
 
-const REVENUECAT_GOOGLE_API_KEY = 'test_RwbWrWFJuZoSYxOuuvZBZOCKohJ';
+const REVENUECAT_GOOGLE_API_KEY = 'goog_nvvRjKRKEArZjnuDZDeKGzAReip';
 const REVENUECAT_APPLE_API_KEY = REVENUECAT_GOOGLE_API_KEY;
 
 interface ChatMessage {
@@ -98,7 +98,7 @@ export default function MealScanScreen() {
   const [portionFeedback, setPortionFeedback] = useState<'smaller' | 'right' | 'bigger' | null>(null);
   const [pcosEnergy, setPcosEnergy] = useState<'low' | 'okay' | 'good' | null>(null);
 
-  const [trialStartDate] = useState<Date>(new Date());
+  const [trialStartDate, setTrialStartDate] = useState<Date | null>(null);
   const [lastScanDay, setLastScanDay] = useState<string | null>(null);
   const [scanCountToday, setScanCountToday] = useState<number>(0);
   const [showPaywall, setShowPaywall] = useState<boolean>(false);
@@ -161,6 +161,7 @@ export default function MealScanScreen() {
           savedTrialStart = new Date().toISOString();
           await AsyncStorage.setItem('trialStartDate', savedTrialStart);
         }
+        setTrialStartDate(new Date(savedTrialStart));
 
         if (savedDay === todayStr && savedCount !== null) {
           setLastScanDay(savedDay);
@@ -267,12 +268,16 @@ export default function MealScanScreen() {
   const checkTrialStatus = (): { allowed: boolean; reason?: string } => {
     if (isSubscribed) return { allowed: true };
 
+    if (!trialStartDate) {
+      return { allowed: false, reason: 'Trial data not loaded yet.' };
+    }
+
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
     const daysElapsed = (now.getTime() - trialStartDate.getTime()) / (1000 * 60 * 60 * 24);
 
     if (daysElapsed > TRIAL_DAYS) {
-      return { allowed: false, reason: `Your ${TRIAL_DAYS}-day free trial has expired.` };
+      return { allowed: false, reason: `Your ${TRIAL_DAYS}-day free trial has expired.Upgrade to Pro for unlimited scans.` };
     }
 
     const scansUsedToday = lastScanDay === todayStr ? scanCountToday : 0;
