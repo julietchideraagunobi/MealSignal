@@ -132,7 +132,7 @@ Guidelines:
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
                     temperature=0.7,
-                    max_output_tokens=400,
+                    max_output_tokens=1000,
                 )
             )
             return {"reply": response.text.strip()}
@@ -314,4 +314,5 @@ async def portion_feedback(payload: PortionFeedbackRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)

@@ -15,6 +15,7 @@ import {
   Linking,
   FlatList,
   Platform,
+  ImageStyle,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Purchases, { PurchasesPackage, CustomerInfo } from 'react-native-purchases';
@@ -298,8 +299,8 @@ export default function MealScanScreen() {
 
       const compressed = await ImageManipulator.manipulateAsync(
         result.assets[0].uri,
-        [{ resize: { width: 800 } }],
-        { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+        [{ resize: { width: 512 } }], // 512px is ideal for food recognition and uploads 3x faster
+        { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG, base64: true }
       );
 
       if (compressed.base64) {
@@ -325,8 +326,8 @@ export default function MealScanScreen() {
 
       const compressed = await ImageManipulator.manipulateAsync(
         result.assets[0].uri,
-        [{ resize: { width: 800 } }],
-        { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+        [{ resize: { width: 512 } }], // 512px is ideal for food recognition and uploads 3x faster
+        { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG, base64: true }
       );
 
       if (compressed.base64) {
@@ -455,6 +456,13 @@ export default function MealScanScreen() {
     if (!trimmedMessage || coachLoading) {
       return;
     }
+    // 🔒 Add this check to gate AI Coach:
+    const trialCheck = checkTrialStatus();
+    if (!trialCheck.allowed) {
+      setPaywallReason('Upgrade to MealSignal Pro to chat with your personal AI Nutrition Coach.');
+      setShowPaywall(true);
+      return;
+    }
 
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -529,9 +537,27 @@ export default function MealScanScreen() {
     <View style={{ flex: 1 }}>
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-          <Text style={styles.title}>MealSignal</Text>
-          <Text style={styles.greetingText}>{getGreeting()}</Text>
-          <Text style={styles.tagline}>Smart Food & Nutrition Analyzer</Text>
+         {/* Header Row with Top-Right Profile Icon */}
+          <View style={styles.headerRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.title}>MealSignal</Text>
+              <Text style={styles.greetingText}>{getGreeting()}</Text>
+              <Text style={styles.tagline}>Smart Food & Nutrition Analyzer</Text>
+            </View>
+            <TouchableOpacity
+              style={[
+                styles.profileHeaderBtn,
+                currentTab === 'profile' && styles.profileHeaderBtnActive,
+              ]}
+              onPress={() => setCurrentTab('profile')}
+            >
+              <Ionicons
+                name={currentTab === 'profile' ? 'person' : 'person-outline'}
+                size={22}
+                color={currentTab === 'profile' ? '#FFFFFF' : '#10B981'}
+              />
+            </TouchableOpacity>
+          </View>
 
 
          {/* Trial / Pro Status Banner */}
@@ -575,13 +601,6 @@ export default function MealScanScreen() {
               onPress={() => setCurrentTab('coach')}
             >
               <Text style={currentTab === 'coach' ? styles.activeModeText : styles.modeText}>AI Coach 💬</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.modeBtn, currentTab === 'profile' && styles.activeModeBtn]}
-              onPress={() => setCurrentTab('profile')}
-            >
-              <Text style={currentTab === 'profile' ? styles.activeModeText : styles.modeText}>Profile 👤</Text>
             </TouchableOpacity>
           </View>
 
@@ -634,7 +653,7 @@ export default function MealScanScreen() {
 
               <TouchableOpacity
                 style={styles.settingRow}
-                onPress={() => Linking.openURL('https://mealsignal.netlify.app/privacy')}
+                onPress={() => Linking.openURL('https://mealsignal.netlify.app/')}
               >
                 <Ionicons name="shield-checkmark-outline" size={20} color="#10B981" />
                 <Text style={styles.settingRowText}>Privacy Policy</Text>
@@ -643,7 +662,7 @@ export default function MealScanScreen() {
 
               <TouchableOpacity
                 style={styles.settingRow}
-                onPress={() => Linking.openURL('https://mealsignal.netlify.app/terms')}
+                onPress={() => Linking.openURL('https://mealsignal.netlify.app/')}
               >
                 <Ionicons name="document-text-outline" size={20} color="#10B981" />
                 <Text style={styles.settingRowText}>Terms of Service</Text>
@@ -995,17 +1014,45 @@ export default function MealScanScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20, backgroundColor: '#F9FAFB', flexGrow: 1 },
-  title: { fontSize: 26, fontWeight: 'bold', textAlign: 'center', color: '#111827' },
-  tagline: { fontSize: 13, textAlign: 'center', color: '#6B7280', marginBottom: 12 },
+  container: { paddingHorizontal: 16, paddingVertical: 12 },
+  title: { fontSize: 26, fontWeight: 'bold', textAlign: 'left', color: '#111827' },
+  tagline: { fontSize: 13, textAlign: 'left', color: '#6B7280', marginBottom: 12 },
   greetingText: {
     fontSize: 16,
     fontWeight: '600',
     color: '#10B981',
-    textAlign: 'center',
-    marginTop: 4,
+    textAlign: 'left',
+    marginTop: 2,
     marginBottom: 2,
   },
+
+headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  profileHeaderBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#10B981',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+  },
+  profileHeaderBtnActive: {
+    backgroundColor: '#10B981',
+    borderColor: '#059669',
+  },
+
   trialBanner: {
     backgroundColor: '#FEF3C7',
     padding: 10,
@@ -1067,7 +1114,7 @@ const styles = StyleSheet.create({
     borderColor: '#E5E7EB',
     marginBottom: 12,
   },
-  previewImage: { width: 60, height: 60, borderRadius: 6 },
+  previewImage: { width: 60, height: 60, borderRadius: 6 } as const,
   removeImageText: { color: '#EF4444', fontWeight: 'bold', fontSize: 14 },
   sectionTitle: { fontSize: 13, fontWeight: 'bold', color: '#374151', marginBottom: 8, marginTop: 12 },
   chip: { backgroundColor: '#E5E7EB', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: '#D1D5DB' },
@@ -1118,11 +1165,11 @@ const styles = StyleSheet.create({
   closePaywallBtn: { backgroundColor: '#10B981', paddingVertical: 12, borderRadius: 8, width: '100%', alignItems: 'center' },
   closePaywallText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
   coachContainer: { backgroundColor: '#FFFFFF', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#E5E7EB', marginBottom: 16 },
-  chatBubble: { marginVertical: 6, maxWidth: '85%' },
+  chatBubble: { marginVertical: 6, maxWidth: '85%', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12},
   userBubble: { alignSelf: 'flex-end', backgroundColor: '#10B981', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8 },
   aiBubble: { alignSelf: 'flex-start', backgroundColor: '#F3F4F6', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8 },
   userBubbleText: { color: '#FFFFFF', fontSize: 13 },
-  aiBubbleText: { color: '#374151', fontSize: 13 },
+  aiBubbleText: { color: '#374151', fontSize: 13, lineHeight: 19 },
   coachLoadingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 8 },
   coachLoadingText: { color: '#6B7280', fontSize: 12 },
   coachInputRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-end' },
