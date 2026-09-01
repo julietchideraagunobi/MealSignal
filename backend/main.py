@@ -32,6 +32,8 @@ app.add_middleware(
 
 
 class AnalysisRequest(BaseModel):
+    device_id: Optional[str] = "unknown_device"
+    is_pro: Optional[bool] = False
     food_name: Optional[str] = Field(default=None, max_length=100)
     image_data: Optional[str] = Field(default=None)
     conditions: List[str] = Field(default=[])
@@ -121,7 +123,7 @@ Guidelines:
 
     final_prompt = f"{conversation_text}User: {payload.prompt}\nCoach:"
 
-    model_candidates = ["gemini-flash-latest", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
+    model_candidates = [ "gemini-3.5-flash", "gemini-2.5-flash"]
     last_error = None
 
     for model_name in model_candidates:
@@ -178,7 +180,7 @@ WARNING_TEMPLATES = {
 }
 
 # Primary model
-PRIMARY_MODEL = ["gemini-flash-latest", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
+PRIMARY_MODEL = ["gemini-3.5-flash", "gemini-2.5-flash"]
 
 # Fallback list in case of rate limits or temporary downtime
 FALLBACK_MODELS = [
@@ -222,9 +224,29 @@ def evaluate_conditions(raw: dict, conditions: list[str], lang: str = "en") -> t
 def read_root():
     return {"status": "MealSignal API is live"}
 
+from datetime import date
+from collections import defaultdict
+
+scan_tracker = defaultdict(lambda: {"count": 0, "date": str(date.today())})
 
 @app.post("/api/v1/analyze", response_model=AnalysisResponse, status_code=status.HTTP_200_OK)
 async def analyze_food(payload: AnalysisRequest):
+
+# Trial Rate Limit Check
+    today_str = str(date.today())
+    record = scan_tracker[payload.device_id]
+    if record["date"] != today_str:
+        record["count"] = 0
+        record["date"] = today_str
+
+    if not payload.is_pro and record["count"] >= 3:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Daily trial scan limit reached. Please upgrade to Pro."
+        )
+
+    record["count"] += 1
+    
     food = payload.food_name.strip() if payload.food_name else "Scanned Food Item"
     user_conditions = ", ".join(payload.conditions) if payload.conditions else "None"
     target_language = LANGUAGE_MAPPING.get(payload.language, "English")
@@ -261,7 +283,7 @@ async def analyze_food(payload: AnalysisRequest):
         except Exception as img_err:
             print(f"Failed to process image attachment: {img_err}")
 
-    model_candidates = ["gemini-flash-latest", "gemini-3.6-flash", "gemini-3.6-flash-light"] 
+    model_candidates = ["gemini-flash-latest",  "gemini-3.5-flash-lite", "gemini-2.5-flash",] 
     last_error = None
 
     for model_name in model_candidates:

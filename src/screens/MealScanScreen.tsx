@@ -296,7 +296,7 @@ export default function MealScanScreen() {
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      quality: 0.8,
+      quality: 0.5,
     });
 
     if (!result.canceled && result.assets[0].uri) {
@@ -323,7 +323,7 @@ export default function MealScanScreen() {
 
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ['images'],
-      quality: 0.8,
+      quality: 0.5, // Changed from 0.8 to keep RAM usage minimal
     });
 
     if (!result.canceled && result.assets[0].uri) {
@@ -335,9 +335,13 @@ export default function MealScanScreen() {
         { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG, base64: true }
       );
 
-      if (compressed.base64) {
-        setBase64Image(`data:image/jpeg;base64,${compressed.base64}`);
+      const imageData = compressed.base64 ? `data:image/jpeg;base64,${compressed.base64}` : null;
+
+      if (imageData) {
+        setBase64Image(imageData);
       }
+
+      await analyzeMeal();
     }
   };
 
@@ -653,7 +657,7 @@ export default function MealScanScreen() {
               <Text style={styles.profileSectionHeader}>About MealSignal</Text>
               <View style={styles.aboutRow}>
                 <Text style={styles.aboutLabel}>Version</Text>
-                <Text style={styles.aboutValue}>1.0.0 (Production)</Text>
+                <Text style={styles.aboutValue}>1.0.5 (Production)</Text>
               </View>
 
               <TouchableOpacity
