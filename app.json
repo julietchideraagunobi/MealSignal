@@ -2,7 +2,7 @@
   "expo": {
     "name": "MealSignal",
     "slug": "MealSignal",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "scheme": "mealsignal",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -19,7 +19,7 @@
     "android": {
       "package": "com.MealSignal.app",
     
-      "versionCode": 4,
+      "versionCode": 5,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#10B981"

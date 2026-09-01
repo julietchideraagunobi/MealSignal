@@ -17,6 +17,7 @@ import {
   Platform,
   ImageStyle,
 } from 'react-native';
+import * as Application from 'expo-application';
 import { Ionicons } from '@expo/vector-icons';
 import Purchases, { PurchasesPackage, CustomerInfo } from 'react-native-purchases';
 import * as ImagePicker from 'expo-image-picker';
@@ -366,11 +367,19 @@ export default function MealScanScreen() {
 
     try {
       const combinedConditions = [...userProfile.conditions, ...dietaryList];
+     
+      // Get unique device ID per phone
+      const deviceId =
+        Platform.OS === 'android'
+          ? Application.getAndroidId()
+          : await Application.getIosIdForVendorAsync()
 
       const response = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          device_id: deviceId || 'unknown_device',
+          is_pro: isSubscribed,
           food_name: foodName.trim() || null,
           image_data: base64Image,
           conditions: combinedConditions,
