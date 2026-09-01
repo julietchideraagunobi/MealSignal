@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import base64
 from pathlib import Path
 from typing import List, Optional, Literal
@@ -134,7 +135,7 @@ Guidelines:
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
                     temperature=0.7,
-                    max_output_tokens=800,
+                    max_output_tokens=700,
                 )
             )
             return {"reply": response.text.strip()}
@@ -262,7 +263,9 @@ async def analyze_food(payload: AnalysisRequest):
     3. Update `food_name` accurately (e.g., "Grilled Chicken Bowl").
     4. Provide `portion_estimate` (e.g., "1 bowl (~350g)").
     5. Provide a balanced, nutrient-dense recipe suggestion (`recipe_title`, `ingredients`, `steps`)
-       tailored to the scanned meal and aligning with any user dietary focus or conditions if provided.
+       tailored to the scanned meal and aligning with any user dietary focus or conditions.
+       keep `ingredients` to max 3-4 key items and `steps` to exactly 4 short, direct sentences.
+       """"""
     6. All text output MUST be in {target_language}.
     """
 
@@ -289,7 +292,9 @@ async def analyze_food(payload: AnalysisRequest):
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=RawAnalysis,
-                    temperature=0.2,
+                    temperature=0.1,
+                    max_output_tokens=500,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),  # ⚡ Disables thinking latency
                 ),
             )
             raw_data = json.loads(response.text)
