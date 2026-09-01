@@ -123,7 +123,7 @@ Guidelines:
 
     final_prompt = f"{conversation_text}User: {payload.prompt}\nCoach:"
 
-    model_candidates = [ "gemini-3.5-flash", "gemini-2.5-flash"]
+    model_candidates = [ "gemini-3.5-flash",]
     last_error = None
 
     for model_name in model_candidates:
@@ -134,7 +134,7 @@ Guidelines:
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
                     temperature=0.7,
-                    max_output_tokens=1000,
+                    max_output_tokens=800,
                 )
             )
             return {"reply": response.text.strip()}
@@ -180,13 +180,8 @@ WARNING_TEMPLATES = {
 }
 
 # Primary model
-PRIMARY_MODEL = ["gemini-3.5-flash", "gemini-2.5-flash"]
+PRIMARY_MODEL = ["gemini-3.5-flash",]
 
-# Fallback list in case of rate limits or temporary downtime
-FALLBACK_MODELS = [
-    "gemini-3.5-flash-lite",
-    "gemini-2.5-flash",
-]
 
 
 def evaluate_conditions(raw: dict, conditions: list[str], lang: str = "en") -> tuple[str, str]:
@@ -283,7 +278,7 @@ async def analyze_food(payload: AnalysisRequest):
         except Exception as img_err:
             print(f"Failed to process image attachment: {img_err}")
 
-    model_candidates = ["gemini-flash-latest",  "gemini-3.5-flash-lite", "gemini-2.5-flash",] 
+    model_candidates = ["gemini-3.5-flash"] 
     last_error = None
 
     for model_name in model_candidates:
