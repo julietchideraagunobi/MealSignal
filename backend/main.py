@@ -124,7 +124,7 @@ Guidelines:
 
     final_prompt = f"{conversation_text}User: {payload.prompt}\nCoach:"
 
-    model_candidates =  "gemini-3.5-flash"
+    model_candidates =  ["gemini-3.5-flash"]
     last_error = None
 
     for model_name in model_candidates:
@@ -181,7 +181,7 @@ WARNING_TEMPLATES = {
 }
 
 # Primary model
-PRIMARY_MODEL = "gemini-3.5-flash-lite"
+PRIMARY_MODEL = ["gemini-3.5-flash-lite"]
 
 
 
@@ -286,7 +286,7 @@ async def analyze_food(payload: AnalysisRequest):
 
     t1 = time.time()
 
-    model_candidates = "gemini-3.5-flash-lite"
+    model_candidates = ["gemini-3.5-flash-lite"]
     last_error = None
 
     for model_name in model_candidates:
