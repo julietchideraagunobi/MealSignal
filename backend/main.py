@@ -227,6 +227,34 @@ scan_tracker = defaultdict(lambda: {"count": 0, "date": str(date.today())})
 
 @app.post("/api/v1/analyze", response_model=AnalysisResponse, status_code=status.HTTP_200_OK)
 async def analyze_food(payload: AnalysisRequest):
+    t_start = time.time()
+
+    # 1. Image decoding time
+    t0 = time.time()
+    contents = []
+    if payload.image_data:
+        # Image conversion/cleanup logic
+        contents.append(...)
+    if payload.food_name:
+        contents.append(payload.food_name)
+    t_image = time.time()
+    print(f"⏱️ Image prep took: {t_image - t0:.2f}s")
+
+    # 2. Gemini API request time
+    t1 = time.time()
+    response = client.models.generate_content(...)
+    t_gemini = time.time()
+    print(f"⏱️ Gemini API call took: {t_gemini - t1:.2f}s")
+
+    # 3. JSON parsing / validation time
+    t2 = time.time()
+    raw_data = json.loads(response.text)
+    t_json = time.time()
+    print(f"⏱️ JSON parsing took: {t_json - t2:.2f}s")
+
+    print(f"🚀 TOTAL Backend execution: {time.time() - t_start:.2f}s")
+    return raw_data
+
 
 # Trial Rate Limit Check
     today_str = str(date.today())
