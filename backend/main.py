@@ -229,33 +229,6 @@ scan_tracker = defaultdict(lambda: {"count": 0, "date": str(date.today())})
 async def analyze_food(payload: AnalysisRequest):
     t_start = time.time()
 
-    # 1. Image decoding time
-    t0 = time.time()
-    contents = []
-    if payload.image_data:
-        # Image conversion/cleanup logic
-        contents.append(...)
-    if payload.food_name:
-        contents.append(payload.food_name)
-    t_image = time.time()
-    print(f"⏱️ Image prep took: {t_image - t0:.2f}s")
-
-    # 2. Gemini API request time
-    t1 = time.time()
-    response = client.models.generate_content(...)
-    t_gemini = time.time()
-    print(f"⏱️ Gemini API call took: {t_gemini - t1:.2f}s")
-
-    # 3. JSON parsing / validation time
-    t2 = time.time()
-    raw_data = json.loads(response.text)
-    t_json = time.time()
-    print(f"⏱️ JSON parsing took: {t_json - t2:.2f}s")
-
-    print(f"🚀 TOTAL Backend execution: {time.time() - t_start:.2f}s")
-    return raw_data
-
-
 # Trial Rate Limit Check
     today_str = str(date.today())
     record = scan_tracker[payload.device_id]
@@ -297,6 +270,7 @@ async def analyze_food(payload: AnalysisRequest):
     6. All text output MUST be in {target_language}.
     """
 
+    t0 = time.time()
     contents = [prompt]
     if payload.image_data:
         try:
@@ -308,8 +282,11 @@ async def analyze_food(payload: AnalysisRequest):
             contents.append(image_part)
         except Exception as img_err:
             print(f"Failed to process image attachment: {img_err}")
+        print(f"⏱️ Image prep took: {time.time() - t0:.2f}s")
 
-    model_candidates = ["gemini-3.5-flash"] 
+    t1 = time.time()
+
+    model_candidates = ["gemini-3.5-flash"]
     last_error = None
 
     for model_name in model_candidates:
@@ -322,9 +299,13 @@ async def analyze_food(payload: AnalysisRequest):
                     response_schema=RawAnalysis,
                     temperature=0.1,
                     max_output_tokens=500,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),  # ⚡ Disables thinking latency
+                    thinking_config=types.ThinkingConfig(thinking_level="minimal"),
                 ),
             )
+            print(f"⏱️ Gemini API call took: {time.time() - t1:.2f}s")
+            t2 = time.time()
+            print(f"⏱️ JSON parsing took: {time.time() - t2:.2f}s")
+
             raw_data = json.loads(response.text)
 
             verdict, warning = evaluate_conditions(raw_data, payload.conditions, payload.language)
@@ -345,6 +326,7 @@ async def analyze_food(payload: AnalysisRequest):
                 "recipe_title": raw_data["recipe_title"],
                 "recipe_details": raw_data["recipe_details"],
             }
+            print(f"🚀 TOTAL Backend execution: {time.time() - t_start:.2f}s")
             return final_response
 
         except Exception as e:
