@@ -17,7 +17,6 @@ import {
   Platform,
   ImageStyle,
 } from 'react-native';
-import * as Application from 'expo-application';
 import { Ionicons } from '@expo/vector-icons';
 import Purchases, { PurchasesPackage, CustomerInfo } from 'react-native-purchases';
 import * as ImagePicker from 'expo-image-picker';
@@ -368,18 +367,22 @@ export default function MealScanScreen() {
     try {
       const combinedConditions = [...userProfile.conditions, ...dietaryList];
      
-      // Get unique device ID per phone
-      const deviceId =
-        Platform.OS === 'android'
-          ? Application.getAndroidId()
-          : await Application.getIosIdForVendorAsync()
 
-      const response = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+       // Retrieve the stored Google ID token
+const userToken = await AsyncStorage.getItem('user_google_id_token');
+if (!userToken) {
+  Alert.alert('Sign In Required', 'Please sign in with your Google account to continue.');
+  setLoading(false);
+  return;
+}
+
+const response = await fetch(API_URL, {
+     method: 'POST',
+      headers: { 
+       'Content-Type': 'application/json',
+        'Authorization': `Bearer ${userToken}`,
+        },
         body: JSON.stringify({
-          device_id: deviceId || 'unknown_device',
-          is_pro: isSubscribed,
           food_name: foodName.trim() || null,
           image_data: base64Image,
           conditions: combinedConditions,
@@ -459,7 +462,7 @@ export default function MealScanScreen() {
   const handlePortionFeedback = async (type: 'smaller' | 'right' | 'bigger') => {
     setPortionFeedback(type);
     try {
-      await fetch(`${API_URL}/portion-feedback`, {
+      await fetch('https://mealsignal.onrender.com/api/v1/analyze/portion-feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ foodName: analysis?.foodName, feedback: type }),
@@ -492,10 +495,19 @@ export default function MealScanScreen() {
     setCoachInput('');
     setCoachLoading(true);
 
-    try {
+      try{
+       const userToken = await AsyncStorage.getItem('user_google_id_token');
+        if (!userToken) {
+       Alert.alert('Sign In Required', 'Please sign in with your Google account to continue.');
+         setLoading(false);
+        return;
+      }   
       const response = await fetch(COACH_API_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+       headers: { 
+       'Content-Type': 'application/json',
+       'Authorization': `Bearer ${userToken}`,
+        },
         body: JSON.stringify({
           prompt: trimmedMessage,
           history: coachMessages.map((m) => ({ sender: m.sender, text: m.text })),

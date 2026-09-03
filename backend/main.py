@@ -2,15 +2,22 @@ import os
 import json
 import time
 import base64
+import httpx
 from pathlib import Path
+from datetime import date, datetime, timezone
 from typing import List, Optional, Literal
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+from sqlalchemy import create_engine, Column, String, Integer
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
+# 1. Environment & Config
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
@@ -19,6 +26,57 @@ if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY is missing from backend/.env")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+# 2. Google OAuth Client IDs
+VALID_CLIENT_IDS = [
+    cid for cid in [
+        os.getenv("GOOGLE_CLIENT_ID_ANDROID"),
+        os.getenv("GOOGLE_CLIENT_ID_IOS"),
+        os.getenv("GOOGLE_CLIENT_ID_WEB"),
+    ] if cid
+]
+if not VALID_CLIENT_IDS:
+    raise ValueError("No GOOGLE_CLIENT_ID_* values set in backend/.env")
+
+# 3. RevenueCat Config
+REVENUECAT_SECRET_API_KEY = os.getenv("REVENUECAT_SECRET_API_KEY")
+REVENUECAT_WEBHOOK_SECRET = os.getenv("REVENUECAT_WEBHOOK_SECRET")
+if not REVENUECAT_SECRET_API_KEY:
+    raise ValueError("REVENUECAT_SECRET_API_KEY is missing from backend/.env")
+if not REVENUECAT_WEBHOOK_SECRET:
+    raise ValueError("REVENUECAT_WEBHOOK_SECRET is missing from backend/.env")
+
+TRIAL_DAYS = 3
+TRIAL_SCANS_PER_DAY = 3
+
+# 4. PostgreSQL Database Engine (Falls back to SQLite for local dev)
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./mealsignal.db")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+class UserRecord(Base):
+    __tablename__ = "users"
+    google_sub = Column(String, primary_key=True, index=True)
+    email = Column(String, nullable=True)
+    scans_today = Column(Integer, default=0)
+    last_scan_date = Column(String, default=str(date.today()))
+    trial_start_date = Column(String, default=str(date.today()))
+    is_pro = Column(Integer, default=0)
+
+Base.metadata.create_all(bind=engine)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 LANGUAGE_MAPPING = {"en": "English", "de": "German", "fr": "French"}
 
@@ -32,20 +90,83 @@ app.add_middleware(
 )
 
 
+# 5. Auth Dependency
+async def get_current_user(
+    authorization: str = Header(...),
+    db: Session = Depends(get_db)
+) -> UserRecord:
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or malformed Authorization header"
+        )
+    token = authorization.split(" ", 1)[1]
+
+    try:
+        idinfo = id_token.verify_oauth2_token(token, google_requests.Request())
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Google token"
+        )
+
+    if idinfo.get("aud") not in VALID_CLIENT_IDS:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token audience"
+        )
+
+    sub = idinfo["sub"]
+    email = idinfo.get("email", "")
+
+    user = db.query(UserRecord).filter(UserRecord.google_sub == sub).first()
+    if not user:
+        today_str = str(date.today())
+        user = UserRecord(
+            google_sub=sub,
+            email=email,
+            scans_today=0,
+            last_scan_date=today_str,
+            trial_start_date=today_str,
+            is_pro=0
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    return user
+
+
+# 6. RevenueCat Helper
+async def check_revenuecat_pro_status(google_sub: str) -> bool:
+    url = f"https://api.revenuecat.com/v1/subscribers/{google_sub}"
+    headers = {"Authorization": f"Bearer {REVENUECAT_SECRET_API_KEY}"}
+    async with httpx.AsyncClient() as client_http:
+        resp = await client_http.get(url, headers=headers)
+    if resp.status_code != 200:
+        return False
+    data = resp.json()
+    entitlements = data.get("subscriber", {}).get("entitlements", {})
+    pro_entitlement = entitlements.get("pro")
+    if not pro_entitlement:
+        return False
+    expires_date = pro_entitlement.get("expires_date")
+    if expires_date is None:
+        return True
+    return datetime.fromisoformat(expires_date.replace("Z", "+00:00")) > datetime.now(timezone.utc)
+
+
+# 7. Request & Response Schemas
 class AnalysisRequest(BaseModel):
-    device_id: Optional[str] = "unknown_device"
-    is_pro: Optional[bool] = False
     food_name: Optional[str] = Field(default=None, max_length=100)
     image_data: Optional[str] = Field(default=None)
     conditions: List[str] = Field(default=[])
     language: Literal["en", "de", "fr"] = Field(default="en")
     mode: Optional[str] = Field(default="standard")
 
-
 class RecipeDetails(BaseModel):
     ingredients: List[str]
     steps: List[str]
-
 
 class RawAnalysis(BaseModel):
     food_name: str
@@ -61,7 +182,6 @@ class RawAnalysis(BaseModel):
     glycemic_load: int
     recipe_title: str
     recipe_details: RecipeDetails
-
 
 class AnalysisResponse(BaseModel):
     food_name: str
@@ -79,7 +199,6 @@ class AnalysisResponse(BaseModel):
     recipe_title: str
     recipe_details: RecipeDetails
 
-
 class PortionFeedbackRequest(BaseModel):
     foodName: Optional[str] = None
     feedback: str
@@ -88,65 +207,11 @@ class ChatMessage(BaseModel):
     sender: str
     text: str
 
-
 class AICoachRequest(BaseModel):
     prompt: str
     history: List[ChatMessage] = Field(default=[])
     userContext: Optional[dict] = Field(default={})
 
-
-@app.post("/api/v1/ai-coach")
-async def ai_coach(payload: AICoachRequest):
-    if not payload.prompt.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Prompt cannot be empty"
-        )
-
-    user_name = payload.userContext.get("name", "Friend") if payload.userContext else "Friend"
-    user_goals = payload.userContext.get("goals", "Health & nutrition tracking") if payload.userContext else "General wellness"
-
-    system_instruction = f"""You are MealSignal AI Coach, a supportive, knowledgeable, and empathetic nutrition assistant.
-User Name: {user_name}
-User Goals: {user_goals}
-
-Guidelines:
-- Provide encouraging, practical nutrition and meal planning advice.
-- Keep answers concise, clear, and scannable (1-3 short paragraphs or bullet points).
-- If giving recommendations, emphasize balanced whole foods and healthy habits.
-"""
-
-    # Build conversation context from previous turns
-    conversation_text = ""
-    for msg in payload.history[-6:]:
-        role_label = "User" if msg.sender == "user" else "Coach"
-        conversation_text += f"{role_label}: {msg.text}\n"
-
-    final_prompt = f"{conversation_text}User: {payload.prompt}\nCoach:"
-
-    model_candidates =  ["gemini-3.5-flash"]
-    last_error = None
-
-    for model_name in model_candidates:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=final_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    temperature=0.7,
-                    max_output_tokens=700,
-                )
-            )
-            return {"reply": response.text.strip()}
-        except Exception as e:
-            print(f"Coach call failed with model '{model_name}': {e}")
-            last_error = e
-
-    raise HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail=f"AI Coach service failed across all model attempts: {str(last_error)}"
-    )
 
 THRESHOLDS = {
     "hypertension": {"field": "sodium_mg", "amber_at": 300, "red_at": 500, "label": "sodium"},
@@ -180,11 +245,6 @@ WARNING_TEMPLATES = {
     }
 }
 
-# Primary model
-PRIMARY_MODEL = ["gemini-3.5-flash-lite"]
-
-
-
 def evaluate_conditions(raw: dict, conditions: list[str], lang: str = "en") -> tuple[str, str]:
     worst_severity = "green"
     worst_message = None
@@ -216,38 +276,48 @@ def evaluate_conditions(raw: dict, conditions: list[str], lang: str = "en") -> t
     return worst_severity, worst_message
 
 
+# 8. Endpoints
 @app.get("/")
 def read_root():
     return {"status": "MealSignal API is live"}
 
-from datetime import date
-from collections import defaultdict
-
-scan_tracker = defaultdict(lambda: {"count": 0, "date": str(date.today())})
 
 @app.post("/api/v1/analyze", response_model=AnalysisResponse, status_code=status.HTTP_200_OK)
-async def analyze_food(payload: AnalysisRequest):
+async def analyze_food(
+    payload: AnalysisRequest, 
+    user: UserRecord = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     t_start = time.time()
+    today_date = date.today()
+    today_str = str(today_date)
 
-# Trial Rate Limit Check
-    today_str = str(date.today())
-    record = scan_tracker[payload.device_id]
-    if record["date"] != today_str:
-        record["count"] = 0
-        record["date"] = today_str
+    # Server-Side Trial Enforcement
+    if not user.is_pro:
+        trial_start = datetime.strptime(user.trial_start_date, "%Y-%m-%d").date()
+        days_since_start = (today_date - trial_start).days
 
-    if not payload.is_pro and record["count"] >= 3:
-       raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Daily trial scan limit reached. Please upgrade to Pro."
-        )
+        if days_since_start >= TRIAL_DAYS:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Free trial period ended. Please upgrade to Pro."
+            )
 
-    record["count"] += 1
-    
+        scans_today = user.scans_today if user.last_scan_date == today_str else 0
+
+        if scans_today >= TRIAL_SCANS_PER_DAY:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Daily scan limit reached. Come back tomorrow."
+            )
+
+        user.scans_today = scans_today + 1
+        user.last_scan_date = today_str
+        db.commit()
+
     food = payload.food_name.strip() if payload.food_name else "Scanned Food Item"
     user_conditions = ", ".join(payload.conditions) if payload.conditions else "None"
     target_language = LANGUAGE_MAPPING.get(payload.language, "English")
-    
 
     prompt = f"""
     You are an expert AI Food & Nutrition Analyzer.
@@ -265,8 +335,7 @@ async def analyze_food(payload: AnalysisRequest):
     4. Provide `portion_estimate` (e.g., "1 bowl (~350g)").
     5. Provide a balanced, nutrient-dense recipe suggestion (`recipe_title`, `ingredients`, `steps`)
        tailored to the scanned meal and aligning with any user dietary focus or conditions.
-       keep `ingredients` to max 3-4 key items and `steps` to exactly 4 short, direct sentences.
-       """"""
+       Keep `ingredients` to max 3-4 key items and `steps` to exactly 4 short sentences.
     6. All text output MUST be in {target_language}.
     """
 
@@ -282,67 +351,157 @@ async def analyze_food(payload: AnalysisRequest):
             contents.append(image_part)
         except Exception as img_err:
             print(f"Failed to process image attachment: {img_err}")
-        print(f"⏱️ Image prep took: {time.time() - t0:.2f}s")
+    print(f"⏱️ Image prep took: {time.time() - t0:.2f}s")
 
     t1 = time.time()
-
-    model_candidates = ["gemini-3.5-flash-lite"]
-    last_error = None
-
-    for model_name in model_candidates:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=RawAnalysis,
-                    temperature=0.1,
-                    max_output_tokens=500,
-                    thinking_config=types.ThinkingConfig(thinking_level="minimal"),
+    try:
+        response = client.models.generate_content(
+            model="gemini-3.5-flash-lite",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=RawAnalysis,
+                temperature=0.1,
+                max_output_tokens=500,
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="MINIMAL"
                 ),
-            )
-            print(f"⏱️ Gemini API call took: {time.time() - t1:.2f}s")
-            t2 = time.time()
-            print(f"⏱️ JSON parsing took: {time.time() - t2:.2f}s")
+            ),
+        )
+        print(f"⏱️ Gemini API call took: {time.time() - t1:.2f}s")
 
-            raw_data = json.loads(response.text)
+        t2 = time.time()
+        raw_data = json.loads(response.text)
+        print(f"⏱️ JSON parsing took: {time.time() - t2:.2f}s")
 
-            verdict, warning = evaluate_conditions(raw_data, payload.conditions, payload.language)
+        verdict, warning = evaluate_conditions(raw_data, payload.conditions, payload.language)
 
-            final_response = {
-                "food_name": raw_data["food_name"],
-                "portion_estimate": raw_data["portion_estimate"],
-                "kcal": raw_data["kcal"],
-                "protein_g": raw_data["protein_g"],
-                "carbs_g": raw_data["carbs_g"],
-                "fat_g": raw_data["fat_g"],
-                "saturated_fat_g": raw_data["saturated_fat_g"],
-                "sodium_mg": raw_data["sodium_mg"],
-                "potassium_mg": raw_data["potassium_mg"],
-                "glycemic_load": raw_data["glycemic_load"],
-                "verdict": verdict,
-                "warning": warning,
-                "recipe_title": raw_data["recipe_title"],
-                "recipe_details": raw_data["recipe_details"],
-            }
-            print(f"🚀 TOTAL Backend execution: {time.time() - t_start:.2f}s")
-            return final_response
+        final_response = {
+            "food_name": raw_data["food_name"],
+            "portion_estimate": raw_data["portion_estimate"],
+            "kcal": raw_data["kcal"],
+            "protein_g": raw_data["protein_g"],
+            "carbs_g": raw_data["carbs_g"],
+            "fat_g": raw_data["fat_g"],
+            "saturated_fat_g": raw_data["saturated_fat_g"],
+            "sodium_mg": raw_data["sodium_mg"],
+            "potassium_mg": raw_data["potassium_mg"],
+            "glycemic_load": raw_data["glycemic_load"],
+            "verdict": verdict,
+            "warning": warning,
+            "recipe_title": raw_data["recipe_title"],
+            "recipe_details": raw_data["recipe_details"],
+        }
+        print(f"🚀 TOTAL Backend execution: {time.time() - t_start:.2f}s")
+        return final_response
 
-        except Exception as e:
-            print(f"Attempt with model '{model_name}' failed: {e}")
-            last_error = e
+    except Exception as e:
+        print(f"Attempt failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"AI Analysis failed: {str(e)}"
+        )
 
-    raise HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail=f"AI Analysis failed across all model attempts: {str(last_error)}"
-    )
+
+@app.post("/api/v1/ai-coach")
+async def ai_coach(
+    payload: AICoachRequest, 
+    user: UserRecord = Depends(get_current_user)
+):
+    if not payload.prompt.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Prompt cannot be empty"
+        )
+
+    user_name = payload.userContext.get("name", "Friend") if payload.userContext else "Friend"
+    user_goals = payload.userContext.get("goals", "Health & nutrition tracking") if payload.userContext else "General wellness"
+
+    system_instruction = f"""You are MealSignal AI Coach, a supportive, knowledgeable, and empathetic nutrition assistant.
+User Name: {user_name}
+User Goals: {user_goals}
+
+Guidelines:
+- Provide encouraging, practical nutrition and meal planning advice.
+- Keep answers concise, clear, and scannable (1-3 short paragraphs or bullet points).
+- If giving recommendations, emphasize balanced whole foods and healthy habits.
+"""
+
+    conversation_text = ""
+    for msg in payload.history[-6:]:
+        role_label = "User" if msg.sender == "user" else "Coach"
+        conversation_text += f"{role_label}: {msg.text}\n"
+
+    final_prompt = f"{conversation_text}User: {payload.prompt}\nCoach:"
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=final_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.7,
+                max_output_tokens=700,
+            ),
+        )
+        return {"reply": response.text.strip()}
+    except Exception as e:
+        print(f"Coach call failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"AI Coach service failed: {str(e)}"
+        )
+
+
+@app.post("/api/v1/revenuecat-webhook")
+async def revenuecat_webhook(
+    payload: dict, 
+    authorization: str = Header(default=""),
+    db: Session = Depends(get_db)
+):
+   # In revenuecat_webhook:
+  auth_token = authorization.replace("Bearer ", "").strip()
+  expected_token = REVENUECAT_WEBHOOK_SECRET.replace("Bearer ", "").strip()
+  if auth_token != expected_token:
+    raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    event = payload.get("event", {})
+    app_user_id = event.get("app_user_id")
+    event_type = event.get("type")
+
+    if not app_user_id:
+        raise HTTPException(status_code=400, detail="Missing app_user_id")
+
+    grants_pro = event_type in ("INITIAL_PURCHASE", "RENEWAL", "UNCANCELLATION", "PRODUCT_CHANGE", "TRANSFER")
+    revokes_pro = event_type in ("EXPIRATION",)
+
+    user = db.query(UserRecord).filter(UserRecord.google_sub == app_user_id).first()
+    if user:
+        if grants_pro:
+            user.is_pro = 1
+        elif revokes_pro:
+            user.is_pro = 0
+        db.commit()
+
+    return {"status": "ok"}
+
+
+@app.post("/api/v1/refresh-pro-status")
+async def refresh_pro_status(
+    user: UserRecord = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    is_pro = await check_revenuecat_pro_status(user.google_sub)
+    user.is_pro = 1 if is_pro else 0
+    db.commit()
+    return {"is_pro": is_pro}
 
 
 @app.post("/api/v1/analyze/portion-feedback")
 async def portion_feedback(payload: PortionFeedbackRequest):
     print(f"Portion feedback received for '{payload.foodName}': {payload.feedback}")
     return {"status": "ok", "message": "Feedback recorded"}
+
 
 if __name__ == "__main__":
     import uvicorn
