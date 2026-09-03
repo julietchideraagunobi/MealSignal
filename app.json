@@ -2,7 +2,7 @@
   "expo": {
     "name": "MealSignal",
     "slug": "MealSignal",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "scheme": "mealsignal",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -18,12 +18,17 @@
     },
     "android": {
       "package": "com.MealSignal.app",
-      "versionCode": 5,
+      "versionCode": 6,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#10B981"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -43,8 +48,15 @@
           "cameraPermission": "Allow MealSignal to access your camera to scan meals."
         }
       ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "MealSignal needs access to your photos so you can select meal images for analysis.",
+          "cameraPermission": "MealSignal needs access to your camera to scan meals and ingredient labels."
+        }
+      ],
       "expo-font",
-      "expo-web-browser"
+      "@react-native-google-signin/google-signin"
     ],
     "extra": {
       "eas": {

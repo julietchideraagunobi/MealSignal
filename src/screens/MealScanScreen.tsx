@@ -23,11 +23,13 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { UserProfile, MealAnalysis } from '../types/nutrition';
-import * as WebBrowser from 'expo-web-browser';
-import * as Google from 'expo-auth-session/providers/google';
-import { makeRedirectUri } from 'expo-auth-session';
+import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 
-WebBrowser.maybeCompleteAuthSession();
+ // Configure Google Sign-In with your Web Client ID for backend verification
+GoogleSignin.configure({
+  webClientId: '221263255868-tm3e1v7aelsemkdhk9nf5olu6a4h9559.apps.googleusercontent.com',
+  offlineAccess: true,
+});
 
 // Live Production Render URL
 const API_URL = 'https://mealsignal.onrender.com/api/v1/analyze';
@@ -113,28 +115,27 @@ export default function MealScanScreen() {
   // RevenueCat states
   const [packages, setPackages] = useState<PurchasesPackage[]>([]);
   const [purchaseLoading, setPurchaseLoading] = useState<boolean>(false);
+  
+  
 
-const redirectUri = makeRedirectUri({
-  scheme: 'mealsignal',
-});
+  const handleGoogleSignIn = async () => {
+    try {
+      await GoogleSignin.hasPlayServices();
+      const userInfo = await GoogleSignin.signIn();
+      const idToken = userInfo.data?.idToken || (userInfo as any).idToken;
 
-const [request, response, promptAsync] = Google.useAuthRequest({
-  androidClientId: 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com',
-  iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com',
-  webClientId: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
-  redirectUri,
-});
-
-// Listen for Google Auth response
-useEffect(() => {
-  if (response?.type === 'success') {
-    const { id_token } = response.params;
-    if (id_token) {
-      AsyncStorage.setItem('user_google_id_token', id_token);
-      Alert.alert('Signed In', 'Google Sign-In successful!');
+      if (idToken) {
+        await AsyncStorage.setItem('user_google_id_token', idToken);
+        Alert.alert('Signed In 🎉', 'Google Sign-In successful! You can now analyze your meals.');
+      }
+    } catch (error: any) {
+      if (error.code !== statusCodes.SIGN_IN_CANCELLED) {
+        Alert.alert('Sign-In Error', error.message || 'Could not complete Google Sign-In.');
+      }
     }
-  }
-}, [response]);
+  };
+
+
 
   useEffect(() => {
     const initPurchasesAndData = async () => {
@@ -398,13 +399,12 @@ useEffect(() => {
        // Retrieve the stored Google ID token
 const userToken = await AsyncStorage.getItem('user_google_id_token');
 if (!userToken) {
-  Alert.alert('Sign In Required', 'Please sign in with your Google account to continue.');
   Alert.alert(
     'Sign In Required',
     'Please sign in with your Google account to analyze meals.',
     [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign in with Google', onPress: () => promptAsync() },
+      { text: 'Sign in with Google', onPress: handleGoogleSignIn }
     ]
   );
   setLoading(false);
@@ -538,7 +538,7 @@ const response = await fetch(API_URL, {
           'Please sign in with your Google account to continue.',
           [
             { text: 'Cancel', style: 'cancel' },
-            { text: 'Sign in with Google', onPress: () => promptAsync() },
+            { text: 'Sign in with Google', onPress: handleGoogleSignIn }
           ]
         );
         setCoachLoading(false);
@@ -702,8 +702,7 @@ const response = await fetch(API_URL, {
 
               <TouchableOpacity
                 style={styles.saveProfileBtn}
-                onPress={() => promptAsync()}
-                disabled={!request}
+                onPress={handleGoogleSignIn}
               >
                 <Text style={styles.saveProfileBtnText}>Sign in with Google</Text>
               </TouchableOpacity>
