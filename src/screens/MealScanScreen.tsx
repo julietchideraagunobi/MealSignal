@@ -23,6 +23,11 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { UserProfile, MealAnalysis } from '../types/nutrition';
+import * as WebBrowser from 'expo-web-browser';
+import * as Google from 'expo-auth-session/providers/google';
+import { makeRedirectUri } from 'expo-auth-session';
+
+WebBrowser.maybeCompleteAuthSession();
 
 // Live Production Render URL
 const API_URL = 'https://mealsignal.onrender.com/api/v1/analyze';
@@ -108,6 +113,28 @@ export default function MealScanScreen() {
   // RevenueCat states
   const [packages, setPackages] = useState<PurchasesPackage[]>([]);
   const [purchaseLoading, setPurchaseLoading] = useState<boolean>(false);
+
+const redirectUri = makeRedirectUri({
+  scheme: 'mealsignal',
+});
+
+const [request, response, promptAsync] = Google.useAuthRequest({
+  androidClientId: 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com',
+  iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com',
+  webClientId: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
+  redirectUri,
+});
+
+// Listen for Google Auth response
+useEffect(() => {
+  if (response?.type === 'success') {
+    const { id_token } = response.params;
+    if (id_token) {
+      AsyncStorage.setItem('user_google_id_token', id_token);
+      Alert.alert('Signed In', 'Google Sign-In successful!');
+    }
+  }
+}, [response]);
 
   useEffect(() => {
     const initPurchasesAndData = async () => {
@@ -372,6 +399,14 @@ export default function MealScanScreen() {
 const userToken = await AsyncStorage.getItem('user_google_id_token');
 if (!userToken) {
   Alert.alert('Sign In Required', 'Please sign in with your Google account to continue.');
+  Alert.alert(
+    'Sign In Required',
+    'Please sign in with your Google account to analyze meals.',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Sign in with Google', onPress: () => promptAsync() },
+    ]
+  );
   setLoading(false);
   return;
 }
@@ -495,18 +530,26 @@ const response = await fetch(API_URL, {
     setCoachInput('');
     setCoachLoading(true);
 
-      try{
-       const userToken = await AsyncStorage.getItem('user_google_id_token');
-        if (!userToken) {
-       Alert.alert('Sign In Required', 'Please sign in with your Google account to continue.');
-         setLoading(false);
+    try {
+      const userToken = await AsyncStorage.getItem('user_google_id_token');
+      if (!userToken) {
+        Alert.alert(
+          'Sign In Required',
+          'Please sign in with your Google account to continue.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Sign in with Google', onPress: () => promptAsync() },
+          ]
+        );
+        setCoachLoading(false);
         return;
-      }   
+      }
+
       const response = await fetch(COACH_API_URL, {
         method: 'POST',
-       headers: { 
-       'Content-Type': 'application/json',
-       'Authorization': `Bearer ${userToken}`,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${userToken}`,
         },
         body: JSON.stringify({
           prompt: trimmedMessage,
@@ -656,6 +699,14 @@ const response = await fetch(API_URL, {
                 value={dailyCalorieGoal}
                 onChangeText={setDailyCalorieGoal}
               />
+
+              <TouchableOpacity
+                style={styles.saveProfileBtn}
+                onPress={() => promptAsync()}
+                disabled={!request}
+              >
+                <Text style={styles.saveProfileBtnText}>Sign in with Google</Text>
+              </TouchableOpacity>
 
               <TouchableOpacity style={styles.saveProfileBtn} onPress={saveProfileSettings}>
                 <Text style={styles.saveProfileBtnText}>Save Profile & Goals</Text>

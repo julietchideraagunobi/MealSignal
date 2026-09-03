@@ -18,7 +18,6 @@
     },
     "android": {
       "package": "com.MealSignal.app",
-    
       "versionCode": 5,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
@@ -44,7 +43,8 @@
           "cameraPermission": "Allow MealSignal to access your camera to scan meals."
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-web-browser"
     ],
     "extra": {
       "eas": {
