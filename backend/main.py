@@ -236,11 +236,11 @@ async def analyze_food(payload: AnalysisRequest):
         record["count"] = 0
         record["date"] = today_str
 
-    #if not payload.is_pro and record["count"] >= 3:
-      #  #raise HTTPException(
-            #status_code=status.HTTP_403_FORBIDDEN,
-            #detail="Daily trial scan limit reached. Please upgrade to Pro."
-        #)
+    if not payload.is_pro and record["count"] >= 3:
+       raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Daily trial scan limit reached. Please upgrade to Pro."
+        )
 
     record["count"] += 1
     
