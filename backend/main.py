@@ -368,29 +368,29 @@ async def analyze_food(
     try:
         response = await asyncio.to_thread(
             client.models.generate_content,
-            model="gemini-3.5-flash-lite",
+            model="gemini-3.1-flash-lite",
             contents=contents,
             config=primary_config,
         )
     except Exception as e1:
         last_error = e1
-        print(f"Primary (3.5 Flash Lite) failed: {e1}. Trying gemini-3.1-flash-lite fallback...")
-        # Tier 2: High-capacity fallback to gemini-3.1-flash-lite
+        print(f"Primary (3.1 Flash Lite) failed: {e1}. Trying gemini-3.6-flash fallback...")
+        # Tier 2: High-capacity fallback to gemini-3.6-flash
         try:
             response = await asyncio.to_thread(
                 client.models.generate_content,
-                model="gemini-3.1-flash-lite",
+                model="gemini-3.6-flash",
                 contents=contents,
                 config=primary_config,
             )
         except Exception as e2:
             last_error = e2
-            print(f"Fallback (3.1 Flash Lite) failed: {e2}. Trying gemini-3.6-flash...")
-            # Tier 3: Final fallback to gemini-3.6-flash
+            print(f"Fallback (3.6 Flash) failed: {e2}. Trying gemini-3.5-flash...")
+            # Tier 3: Final fallback to gemini-3.5-flash
             try:
                 response = await asyncio.to_thread(
                     client.models.generate_content,
-                    model="gemini-3.6-flash",
+                    model="gemini-3.5-flash",
                     contents=contents,
                     config=primary_config,
                 )
