@@ -350,7 +350,7 @@ async def analyze_food(
             print(f"Failed to process image attachment: {img_err}")
     print(f"⏱️ Image prep took: {time.time() - t0:.2f}s")
 
-    gen_config = types.GenerateContentConfig(
+    primary_config = types.GenerateContentConfig(
         response_mime_type="application/json",
         response_schema=RawAnalysis,
         temperature=0.1,
@@ -360,27 +360,53 @@ async def analyze_food(
         ),
     )
 
-    # Resilient execution loop (prevents 503 drops from failing request)
+    fallback_config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=RawAnalysis,
+        temperature=0.1,
+        max_output_tokens=500,
+        thinking_config=types.ThinkingConfig(
+            thinking_budget=0
+        ),
+    )
+
     response = None
     last_error = None
     t1 = time.time()
 
-    for attempt in range(2):
+    # Tier 1: Try 3.5 Flash-Lite
+    try:
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model="gemini-3.5-flash-lite",
+            contents=contents,
+            config=primary_config,
+        )
+    except Exception as e1:
+        last_error = e1
+        print(f"Primary model (3.5 Flash-Lite) failed: {e1}. Trying 2.5 Flash-Lite fallback...")
+        # Tier 2: Try 2.5 Flash-Lite
         try:
             response = await asyncio.to_thread(
                 client.models.generate_content,
-                model="gemini-3.5-flash-lite",
+                model="gemini-2.5-flash-lite",
                 contents=contents,
-                config=gen_config,
+                config=fallback_config,
             )
-            break
-        except Exception as e:
-            last_error = e
-            print(f"Attempt {attempt + 1} failed: {e}")
-            if "503" in str(e) and attempt == 0:
-                await asyncio.sleep(0.5)
-                continue
-            break
+        except Exception as e2:
+            last_error = e2
+            print(f"Fallback model (2.5 Flash-Lite) failed: {e2}. Trying 2.5 Flash fallback...")
+            # Tier 3: Try 2.5 Flash
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model="gemini-2.5-flash",
+                    contents=contents,
+                    config=fallback_config,
+                )
+            except Exception as e3:
+                last_error = e3
+                print(f"Final fallback (2.5 Flash) failed: {e3}")
 
     if not response or not response.text:
         raise HTTPException(
@@ -453,8 +479,7 @@ Guidelines:
         conversation_text += f"{role_label}: {msg.text}\n"
 
     final_prompt = f"{conversation_text}User: {payload.prompt}\nCoach:"
-
-    coach_config = types.GenerateContentConfig(
+    coach_primary_config = types.GenerateContentConfig(
         system_instruction=system_instruction,
         temperature=0.7,
         max_output_tokens=700,
@@ -463,20 +488,59 @@ Guidelines:
         ),
     )
 
+    coach_fallback_config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        temperature=0.7,
+        max_output_tokens=700,
+        thinking_config=types.ThinkingConfig(
+            thinking_budget=0
+        ),
+    )
+
+    response = None
+    last_error = None
+
+    # Tier 1: Try gemini-3.5-flash
     try:
         response = await asyncio.to_thread(
             client.models.generate_content,
             model="gemini-3.5-flash",
             contents=final_prompt,
-            config=coach_config,
+            config=coach_primary_config,
         )
-        return {"reply": response.text.strip()}
-    except Exception as e:
-        print(f"Coach call failed: {e}")
+    except Exception as e1:
+        last_error = e1
+        print(f"Coach primary (3.5 Flash) failed: {e1}. Trying 2.5 Flash fallback...")
+        # Tier 2: Try gemini-2.5-flash (zero thinking delay)
+        try:
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=final_prompt,
+                config=coach_fallback_config,
+            )
+        except Exception as e2:
+            last_error = e2
+            print(f"Coach fallback (2.5 Flash) failed: {e2}. Trying 2.5 Flash-Lite...")
+            # Tier 3: Try gemini-2.5-flash-lite
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model="gemini-2.5-flash-lite",
+                    contents=final_prompt,
+                    config=coach_fallback_config,
+                )
+            except Exception as e3:
+                last_error = e3
+                print(f"Final coach fallback failed: {e3}")
+
+    if not response or not response.text:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"AI Coach service failed: {str(e)}"
+            detail=f"AI Coach service failed across all models: {str(last_error)}"
         )
+
+    return {"reply": response.text.strip()}
 
 
 @app.post("/api/v1/revenuecat-webhook")
