@@ -356,7 +356,7 @@ async def analyze_food(
         temperature=0.1,
         max_output_tokens=300,
         thinking_config=types.ThinkingConfig(
-            thinking_budget=0  # Zero reasoning turns -> instant JSON
+            thinking_level="MINIMAL" # Zero reasoning turns -> instant JSON
         ),
     )
 
@@ -475,7 +475,7 @@ Guidelines:
         temperature=0.7,
         max_output_tokens=700,
         thinking_config=types.ThinkingConfig(
-            thinking_budget=0 # Prevents reasoning hangs while preserving conversational depth
+            thinking_level="LOW" # Prevents reasoning hangs while preserving conversational depth
         ),
     )
 
