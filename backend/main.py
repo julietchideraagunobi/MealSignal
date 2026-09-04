@@ -2,6 +2,7 @@ import os
 import json
 import time
 import base64
+import asyncio
 import httpx
 from pathlib import Path
 from datetime import date, datetime, timezone
@@ -48,7 +49,7 @@ if not REVENUECAT_WEBHOOK_SECRET:
 TRIAL_DAYS = 3
 TRIAL_SCANS_PER_DAY = 3
 
-# 4. PostgreSQL Database Engine (Falls back to SQLite for local dev)
+# 4. PostgreSQL Database Engine
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./mealsignal.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -80,7 +81,7 @@ def get_db():
 
 LANGUAGE_MAPPING = {"en": "English", "de": "German", "fr": "French"}
 
-app = FastAPI(title="MealSignal Backend API", version="1.0.1")
+app = FastAPI(title="MealSignal Backend API", version="1.0.2")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -292,7 +293,7 @@ async def analyze_food(
     today_date = date.today()
     today_str = str(today_date)
 
-    # Server-Side Trial Enforcement
+    # Server-Side Trial Check (Verify eligibility WITHOUT incrementing yet)
     if not user.is_pro:
         trial_start = datetime.strptime(user.trial_start_date, "%Y-%m-%d").date()
         days_since_start = (today_date - trial_start).days
@@ -310,10 +311,6 @@ async def analyze_food(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Daily scan limit reached. Come back tomorrow."
             )
-
-        user.scans_today = scans_today + 1
-        user.last_scan_date = today_str
-        db.commit()
 
     food = payload.food_name.strip() if payload.food_name else "Scanned Food Item"
     user_conditions = ", ".join(payload.conditions) if payload.conditions else "None"
@@ -353,54 +350,77 @@ async def analyze_food(
             print(f"Failed to process image attachment: {img_err}")
     print(f"⏱️ Image prep took: {time.time() - t0:.2f}s")
 
+    gen_config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=RawAnalysis,
+        temperature=0.1,
+        max_output_tokens=500,
+        thinking_config=types.ThinkingConfig(
+            thinking_level="MINIMAL"
+        ),
+    )
+
+    # Resilient execution loop (prevents 503 drops from failing request)
+    response = None
+    last_error = None
     t1 = time.time()
-    try:
-        response = client.models.generate_content(
-            model="gemini-3.5-flash-lite",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=RawAnalysis,
-                temperature=0.1,
-                max_output_tokens=500,
-                thinking_config=types.ThinkingConfig(
-                    thinking_level="MINIMAL"
-                ),
-            ),
-        )
-        print(f"⏱️ Gemini API call took: {time.time() - t1:.2f}s")
 
-        t2 = time.time()
-        raw_data = json.loads(response.text)
-        print(f"⏱️ JSON parsing took: {time.time() - t2:.2f}s")
+    for attempt in range(2):
+        try:
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-3.5-flash-lite",
+                contents=contents,
+                config=gen_config,
+            )
+            break
+        except Exception as e:
+            last_error = e
+            print(f"Attempt {attempt + 1} failed: {e}")
+            if "503" in str(e) and attempt == 0:
+                await asyncio.sleep(0.5)
+                continue
+            break
 
-        verdict, warning = evaluate_conditions(raw_data, payload.conditions, payload.language)
-
-        final_response = {
-            "food_name": raw_data["food_name"],
-            "portion_estimate": raw_data["portion_estimate"],
-            "kcal": raw_data["kcal"],
-            "protein_g": raw_data["protein_g"],
-            "carbs_g": raw_data["carbs_g"],
-            "fat_g": raw_data["fat_g"],
-            "saturated_fat_g": raw_data["saturated_fat_g"],
-            "sodium_mg": raw_data["sodium_mg"],
-            "potassium_mg": raw_data["potassium_mg"],
-            "glycemic_load": raw_data["glycemic_load"],
-            "verdict": verdict,
-            "warning": warning,
-            "recipe_title": raw_data["recipe_title"],
-            "recipe_details": raw_data["recipe_details"],
-        }
-        print(f"🚀 TOTAL Backend execution: {time.time() - t_start:.2f}s")
-        return final_response
-
-    except Exception as e:
-        print(f"Attempt failed: {e}")
+    if not response or not response.text:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"AI Analysis failed: {str(e)}"
+            detail=f"AI Analysis failed: {str(last_error)}"
         )
+
+    print(f"⏱️ Gemini API call took: {time.time() - t1:.2f}s")
+
+    t2 = time.time()
+    raw_data = json.loads(response.text)
+    print(f"⏱️ JSON parsing took: {time.time() - t2:.2f}s")
+
+    # Increment scan count ONLY AFTER successful analysis
+    if not user.is_pro:
+        scans_today = user.scans_today if user.last_scan_date == today_str else 0
+        user.scans_today = scans_today + 1
+        user.last_scan_date = today_str
+        db.commit()
+
+    verdict, warning = evaluate_conditions(raw_data, payload.conditions, payload.language)
+
+    final_response = {
+        "food_name": raw_data["food_name"],
+        "portion_estimate": raw_data["portion_estimate"],
+        "kcal": raw_data["kcal"],
+        "protein_g": raw_data["protein_g"],
+        "carbs_g": raw_data["carbs_g"],
+        "fat_g": raw_data["fat_g"],
+        "saturated_fat_g": raw_data["saturated_fat_g"],
+        "sodium_mg": raw_data["sodium_mg"],
+        "potassium_mg": raw_data["potassium_mg"],
+        "glycemic_load": raw_data["glycemic_load"],
+        "verdict": verdict,
+        "warning": warning,
+        "recipe_title": raw_data["recipe_title"],
+        "recipe_details": raw_data["recipe_details"],
+    }
+    print(f"🚀 TOTAL Backend execution: {time.time() - t_start:.2f}s")
+    return final_response
 
 
 @app.post("/api/v1/ai-coach")
@@ -434,15 +454,21 @@ Guidelines:
 
     final_prompt = f"{conversation_text}User: {payload.prompt}\nCoach:"
 
+    coach_config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        temperature=0.7,
+        max_output_tokens=700,
+        thinking_config=types.ThinkingConfig(
+            thinking_level="MINIMAL"
+        ),
+    )
+
     try:
-        response = client.models.generate_content(
+        response = await asyncio.to_thread(
+            client.models.generate_content,
             model="gemini-3.5-flash",
             contents=final_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.7,
-                max_output_tokens=700,
-            ),
+            config=coach_config,
         )
         return {"reply": response.text.strip()}
     except Exception as e:
@@ -459,11 +485,10 @@ async def revenuecat_webhook(
     authorization: str = Header(default=""),
     db: Session = Depends(get_db)
 ):
-   # In revenuecat_webhook:
-  auth_token = authorization.replace("Bearer ", "").strip()
-  expected_token = REVENUECAT_WEBHOOK_SECRET.replace("Bearer ", "").strip()
-  if auth_token != expected_token:
-    raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    auth_token = authorization.replace("Bearer ", "").strip()
+    expected_token = REVENUECAT_WEBHOOK_SECRET.replace("Bearer ", "").strip()
+    if auth_token != expected_token:
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     event = payload.get("event", {})
     app_user_id = event.get("app_user_id")
