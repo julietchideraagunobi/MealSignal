@@ -356,7 +356,7 @@ async def analyze_food(
         temperature=0.1,
         max_output_tokens=500,
         thinking_config=types.ThinkingConfig(
-            thinking_level="MINIMAL"
+            thinking_budget=0  # Zero reasoning turns -> instant JSON
         ),
     )
 
@@ -364,17 +364,17 @@ async def analyze_food(
     last_error = None
     t1 = time.time()
 
-    # Tier 1: Try gemini-3.5-flash-lite
+    # Tier 1: Try gemini-3.8-flash
     try:
         response = await asyncio.to_thread(
             client.models.generate_content,
-            model="gemini-3.5-flash-lite",
+            model="gemini-3.8-flash",
             contents=contents,
             config=primary_config,
         )
     except Exception as e1:
         last_error = e1
-        print(f"Primary (3.5 Lite) failed: {e1}. Trying gemini-3.6-flash fallback...")
+        print(f"Primary (3.8 Flash) failed: {e1}. Trying gemini-3.6-flash fallback...")
         # Tier 2: High-capacity fallback to gemini-3.6-flash
         try:
             response = await asyncio.to_thread(
@@ -475,29 +475,29 @@ Guidelines:
         temperature=0.7,
         max_output_tokens=700,
         thinking_config=types.ThinkingConfig(
-            thinking_level="MINIMAL"
+            thinking_budget=0
         ),
     )
 
     response = None
     last_error = None
 
-    # Tier 1: Try gemini-3.6-flash
+    # Tier 1: Try gemini-3.8-flash
     try:
         response = await asyncio.to_thread(
             client.models.generate_content,
-            model="gemini-3.6-flash",
+            model="gemini-3.8-flash",
             contents=final_prompt,
             config=coach_config,
         )
     except Exception as e1:
         last_error = e1
-        print(f"Coach primary (3.6 Flash) failed: {e1}. Trying gemini-3.5-flash fallback...")
-        # Tier 2: Fallback to gemini-3.5-flash
+        print(f"Coach primary (3.8 Flash) failed: {e1}. Trying gemini-3.6-flash fallback...")
+        # Tier 2: Fallback to gemini-3.6-flash
         try:
             response = await asyncio.to_thread(
                 client.models.generate_content,
-                model="gemini-3.5-flash",
+                model="gemini-3.6-flash",
                 contents=final_prompt,
                 config=coach_config,
             )
