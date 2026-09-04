@@ -330,9 +330,9 @@ async def analyze_food(
        potassium_mg, phosphorus_mg, saturated_fat_g, glycemic_load.
     3. Update `food_name` accurately (e.g., "Grilled Chicken Bowl").
     4. Provide `portion_estimate` (e.g., "1 bowl (~350g)").
-    5. Provide a balanced, nutrient-dense recipe suggestion (`recipe_title`, `ingredients`, `steps`)
+    5. Provide a short, balanced, nutrient-dense recipe suggestion (`recipe_title`, `ingredients`, `steps`)
        tailored to the scanned meal and aligning with any user dietary focus or conditions.
-       Keep `ingredients` to max 3-4 key items and `steps` to exactly 4 short sentences.
+       Keep `ingredients` to max 2-3 key items and `steps` to exactly Exactly 2 brief sentences (max 12 words per sentence).
     6. All text output MUST be in {target_language}.
     """
 
@@ -354,7 +354,7 @@ async def analyze_food(
         response_mime_type="application/json",
         response_schema=RawAnalysis,
         temperature=0.1,
-        max_output_tokens=500,
+        max_output_tokens=300,
         thinking_config=types.ThinkingConfig(
             thinking_budget=0  # Zero reasoning turns -> instant JSON
         ),
@@ -475,7 +475,7 @@ Guidelines:
         temperature=0.7,
         max_output_tokens=700,
         thinking_config=types.ThinkingConfig(
-            thinking_budget=0
+            thinking_budget=0 # Prevents reasoning hangs while preserving conversational depth
         ),
     )
 
